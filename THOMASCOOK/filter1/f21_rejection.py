@@ -18,6 +18,8 @@ Rejection Rules
 7.  FlightNo bad format (1-3 alpha + digits)    → FN_BAD_FORMAT
 8.  AirlineCode not 2-3 letters                 → AC_BAD_FORMAT
 9.  Airport not exactly 3 letters               → AP_BAD_FORMAT
+10. Consecutive duplicate FlightNumbers         → FN_CONSECUTIVE_DUPLICATE
+11. Consecutive duplicate Airports              → AP_CONSECUTIVE_DUPLICATE
 """
 
 import duckdb
@@ -39,6 +41,7 @@ SOURCE_TABLE = "THOMASCOOK_SPLIT8"  # input  table (read-only)
 TARGET_TABLE = "THOMASCOOK_CLEANED"  # output table for clean / passing rows
 REJECTION_TABLE = "THOMASCOOK_REJECT"  # output table for rejected rows
 
+MAX_AIRPORTS = 14
 MAX_FLIGHTS = 13
 MAX_FLTNO_LEN = 8  # max characters a flight number may have
 BATCH_SIZE = 200_000
@@ -122,6 +125,7 @@ class Reason(str, Enum):
     AC_BAD_FORMAT = "AirlineCode BAD_FORMAT"
     AP_BAD_FORMAT = "Airport BAD_FORMAT"
     FN_CONSECUTIVE_DUPLICATE = "FlightNumber CONSECUTIVE_DUPLICATE"
+    AP_CONSECUTIVE_DUPLICATE = "Airport CONSECUTIVE_DUPLICATE"
 
 
 # ============================================================================
@@ -154,6 +158,21 @@ _DATE_FMTS = [
     "%d %B %Y",
 ]
 
+def check_consecutive_duplicate_airport(row):
+    """Reject if any two consecutive Airport slots are identical."""
+    reasons = []
+    for i in range(1, MAX_AIRPORTS):
+        ap_a = row.get(f"Airport{i}")
+        ap_b = row.get(f"Airport{i + 1}")
+        if not _isna(ap_a) and not _isna(ap_b):
+            ap_a_str = str(ap_a).strip().upper()
+            ap_b_str = str(ap_b).strip().upper()
+            if ap_a_str == ap_b_str:
+                reasons.append(
+                    f"Airport{i}/Airport{i + 1}: {Reason.AP_CONSECUTIVE_DUPLICATE} "
+                    f"(Airport{i}={ap_a_str!r} == Airport{i + 1}={ap_b_str!r})"
+                )
+    return (True, "; ".join(reasons)) if reasons else (False, None)
 
 def check_consecutive_duplicate_flightno(row):
     """Reject if any two consecutive FlightNumber slots are identical."""
@@ -512,6 +531,7 @@ _CHECKS = [
     check_missing_required_slot,
     check_flightno_validity,
     check_consecutive_duplicate_flightno,
+    check_consecutive_duplicate_airport,
     check_route_overflow,
     check_flightdate_format_and_range,
     check_airline_code,
