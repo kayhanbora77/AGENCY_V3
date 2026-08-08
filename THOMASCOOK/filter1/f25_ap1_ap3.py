@@ -9,8 +9,8 @@ import pandas as pd
 # ============================================================================
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-SOURCE_TABLE = "THOMASCOOK_SPLIT9"
-TARGET_TABLE = "THOMASCOOK_SPLIT10"
+SOURCE_TABLE = "THOMASCOOK_SPLIT10"
+TARGET_TABLE = "THOMASCOOK_CLEANED"
 
 MAX_FLIGHTS = 13
 MAX_DATES = 13
@@ -18,8 +18,8 @@ MAX_AIRPORTS = 14
 
 BATCH_SIZE = 200_000
 
-AP2_AP4_WHERE_CLAUSE = """
-WHERE (AIRPORT2 = AIRPORT4) AND (AIRPORT5 IS NULL)
+AP1_AP3_WHERE_CLAUSE = """
+WHERE (AIRPORT1 = AIRPORT3) AND (AIRPORT4 IS NOT NULL)
 """
 
 # ============================================================================
@@ -66,11 +66,11 @@ def get_flights_airports(row_list):
 
 def find_all_split_points(flights, airports):
     """
-    Rule 1 — Exactly 3 flights, Airport2 == Airport4:
-        e.g. BLR → BOM → ZRH → BOM 
+    Rule 1 — Exactly 3 flights, Airport1 == Airport3:
+        e.g. SYD → PER → SYD → BNE
         Split into:
-          Segment 1: FlightNumber1,FlightNumber2 | Airport1 → Airport2 → Airport3 
-          Segment 2: FlightNumber3 | Airport3 → Airport4
+          Segment 1: FlightNumber1 | Airport1 → Airport2 
+          Segment 2: FlightNumber2,FlightNumber3 | Airport2 → Airport3 → Airport4
     """
     n_f = len(flights)
     n_a = len(airports)
@@ -80,9 +80,9 @@ def find_all_split_points(flights, airports):
 
     split_points = set()
 
-    # ── Rule 1: exactly 3 flights and Airport2 == Airport4 ───────────────────
-    if n_f == 3 and n_a == 4 and airports[1] == airports[3]:
-        split_points.add(2)
+    # ── Rule 1: exactly 3 flights and Airport1 == Airport3 ───────────────────
+    if n_f == 3 and n_a == 4 and airports[0] == airports[2]:
+        split_points.add(1)
 
     return sorted(split_points)
 
@@ -217,13 +217,13 @@ def process_table(db_path=DB_PATH, table=SOURCE_TABLE, batch_size=BATCH_SIZE):
     total_source = con.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
     print(f"  Copied {total_source:,} rows into '{TARGET_TABLE}'.")
 
-    # ── Step 2: Count only the 3-flight rows to process ──────────────────────
+    # ── Step 2: Count only the 2-flight rows to process ──────────────────────
     filtered_total = con.execute(f"""
         SELECT COUNT(*)
         FROM "{table}"
-        {AP2_AP4_WHERE_CLAUSE}
+        {AP1_AP3_WHERE_CLAUSE}
     """).fetchone()[0]
-    print(f"\n  Step 2: Processing {filtered_total:,} 3-flight rows for split...")
+    print(f"\n  Step 2: Processing {filtered_total:,} 2-flight rows for split...")
 
     unsplit_total = 0
     split_count = 0
@@ -234,7 +234,7 @@ def process_table(db_path=DB_PATH, table=SOURCE_TABLE, batch_size=BATCH_SIZE):
     cursor.execute(f"""
         SELECT {col_list}
         FROM "{table}"
-        {AP2_AP4_WHERE_CLAUSE}
+        {AP1_AP3_WHERE_CLAUSE}
     """)
 
     while True:
@@ -245,7 +245,7 @@ def process_table(db_path=DB_PATH, table=SOURCE_TABLE, batch_size=BATCH_SIZE):
         batch_df = pd.DataFrame(raw, columns=all_cols)
         unsplit_df, children_df = process_batch(batch_df, all_cols)
 
-        # Unsplit rows (Airport2 != Airport4) already exist in TARGET — skip
+        # Unsplit rows (Airport1 != Airport3) already exist in TARGET — skip
         unsplit_total += len(unsplit_df)
 
         if not children_df.empty:

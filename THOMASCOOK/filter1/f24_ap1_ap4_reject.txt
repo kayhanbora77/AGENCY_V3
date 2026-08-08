@@ -2,8 +2,8 @@ INSERT INTO thomascook_reject
 SELECT
     *,
     'Airport1=Airport4' AS RejectionReason
-FROM THOMASCOOK_CLEANED
+FROM THOMASCOOK_SPLIT10
 WHERE airport1=airport4 and airport5 is null
 
 
-DELETE FROM THOMASCOOK_CLEANED WHERE airport1=airport4 and airport5 is null;
+DELETE FROM THOMASCOOK_SPLIT10 WHERE airport1=airport4 and airport5 is null;
