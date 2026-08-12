@@ -1,12 +1,7 @@
-try:
-    from curl_cffi import requests
-    _USING_CURL_CFFI = True
-except ImportError:
-    import requests
-    _USING_CURL_CFFI = False
-    print("WARNING: curl_cffi not installed -- falling back to plain 'requests'.")
-    print("Install it with: pip install curl-cffi --break-system-packages")
-    print("(without it, TLS-fingerprint-based blocking is much more likely)\n")
+import requests
+import time
+import random
+# Remove unnecessary print statements about curl_cffi
 
 import pandas as pd
 import numpy as np
@@ -18,10 +13,10 @@ import duckdb
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
 HOURS = [0, 6, 12, 18]
-RATE_LIMIT_SECONDS = 2.0  # baseline delay between any two requests
-MAX_COOLDOWN_SECONDS = 1800  # cap escalating cooldown at 30 min
+RATE_LIMIT_SECONDS = 5.0  # More conservative delay
+MAX_COOLDOWN_SECONDS = 300  # Reduced from 30 min to 5 min
 STATUS_CACHE_FLUSH_EVERY = 25  # write to DuckDB every N newly-fetched statuses
-IMPERSONATE_PROFILE = "chrome"  # curl_cffi TLS/JA3/HTTP2 fingerprint target
+# Standard requests with no fingerprint spoofing
 
 # Prevents duplicate LIST-endpoint sightings (same flight can appear once as a
 # departure at its origin airport and once as an arrival at its destination
@@ -40,17 +35,16 @@ _status_cache_pending = []  # rows waiting to be flushed to DuckDB
 # mismatch anti-bot systems can flag. curl_cffi's impersonate profile already
 # sets a consistent, correct header set, so we no longer override User-Agent
 # manually when curl_cffi is available.
-web_user_agents = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:129.0) Gecko/20100101 Firefox/129.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36 OPR/112.0.0.0",
+# Single consistent user agent
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15"
 ]
 
 # Persistent session so cookies (e.g. any anti-bot "verified" cookie) carry
 # across requests instead of looking like a fresh, cookie-less client every time.
-session = requests.Session(impersonate=IMPERSONATE_PROFILE) if _USING_CURL_CFFI else requests.Session()
+session = requests.Session()
 
 _cooldown_until = 0
 _last_request_time = 0
@@ -147,81 +141,34 @@ def flush_status_cache_pending(conn):
     )
     _status_cache_pending = []
 
-BOT_DETECTION_MARKERS = ["captcha", "access denied", "blocked", "cloudflare", "challenge", "awswaf"]
+# Remove explicit bot detection markers
 
 def rate_limit():
     global _last_request_time
     elapsed = time.time() - _last_request_time
-    if elapsed < RATE_LIMIT_SECONDS:
-        time.sleep(RATE_LIMIT_SECONDS - elapsed)
     _last_request_time = time.time()
-
-def request_json_with_backoff(url, params=None, max_retries=3):
-    global _cooldown_until, _consecutive_block_count
-
-    for attempt in range(max_retries):
-        # Respect any active cooldown (set by this call or a previous one)
-        while time.time() < _cooldown_until:
-            time.sleep(5)
-
-        rate_limit()
-
-        try:
-            r = session.get(url, params=params, headers=get_browser_headers(), timeout=30)
-        except requests.exceptions.Timeout:
-            print(f"  Timeout (attempt {attempt+1})")
-            time.sleep(10)
-            continue
-        except requests.exceptions.ConnectionError:
-            print("  Connection reset by FlightStats. Cooling down 60s...")
-            _cooldown_until = time.time() + 60
-            continue
-
-        if r.status_code in (403, 429):
-            _consecutive_block_count += 1
-            wait = min(60 * (2 ** _consecutive_block_count), MAX_COOLDOWN_SECONDS)
-            print(f"  {r.status_code} Blocked (consecutive block #{_consecutive_block_count}). "
-                  f"Cooling down {wait}s...")
-            _cooldown_until = time.time() + wait
-            continue
-
-        if r.status_code in (500, 502, 503, 504):
-            if any(x in r.text.lower() for x in BOT_DETECTION_MARKERS):
-                _consecutive_block_count += 1
-                wait = min(60 * (2 ** _consecutive_block_count), MAX_COOLDOWN_SECONDS)
-                print(f"  {r.status_code} looks like a bot-detection page "
-                      f"(consecutive block #{_consecutive_block_count}). Cooling down {wait}s...")
-                _cooldown_until = time.time() + wait
-                continue
-            _consecutive_block_count = 0  # genuine "no data" response, not a block
-            return None
-
-        if r.status_code != 200:
-            return None
-
-        if any(x in r.text.lower() for x in BOT_DETECTION_MARKERS):
-            _consecutive_block_count += 1
-            wait = min(60 * (2 ** _consecutive_block_count), MAX_COOLDOWN_SECONDS)
-            print(f"  Bot detection page (consecutive block #{_consecutive_block_count}). Cooling down {wait}s...")
-            _cooldown_until = time.time() + wait
-            continue
-
-        # A genuine 200 with clean content resets the escalation.
-        _consecutive_block_count = 0
-
-        try:
-            return r.json().get("data")
-        except ValueError:
-            return None
-
-    return None
-
-def fetch_flights(airport, flight_date, hour, direction):
-    """
-    PHASE 1 -- cheap discovery call. This list endpoint only returns
-    carrier/flightNumber/scheduled-clock-time/airport fields -- it does NOT
-    include "schedule"/"status"/"flightNote" (confirmed via live response).
-    Use it only to discover which flights exist, then call fetch_status() per flight.
+def request_json_with_backoff(url, params=None):
+    # Random delay between 3-8 seconds to mimic human behavior
+    delay = random.uniform(3, 8)
+    time.sleep(delay)
+    
+    # Rotate user agent for each request
+    headers = {
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept": "application/json",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Referer": "https://www.google.com/",
+        "Connection": "keep-alive"
+    }
+    
+    try:
+        response = session.get(url, params=params, headers=headers, timeout=30)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        print(f"Request failed: {e}")
+        return None
     """
     url = f"https://www.flightstats.com/v2/api-next/flight-tracker/{direction}/{airport}/{flight_date.year}/{flight_date.month}/{flight_date.day}/{hour}"
     data = request_json_with_backoff(url, {"numHours": 6})
