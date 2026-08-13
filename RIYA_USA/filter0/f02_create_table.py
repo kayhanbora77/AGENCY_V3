@@ -6,7 +6,7 @@ from pathlib import Path
 # CONFIG
 # ==================================================
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-CSV_PATH = r"C:\Users\cagri\Desktop\Agency\Riya_USA\filter-0\merged_Riya_USA.csv"
+CSV_PATH = r"C:\Users\cagri\Desktop\Agency_Data\Riya_USA\filter-0\merged_Riya_USA.csv"
 TABLE_NAME = "RIYA_USA_RAW"
 
 
@@ -103,14 +103,45 @@ def load_and_insert(con):
             CASE WHEN FlightNumber8 IS NOT NULL AND TRIM(FlightNumber8) != ''
                  THEN COALESCE(SupplierCode, '') || LTRIM(FlightNumber8, '0') END AS FlightNumber8,
 
-            TRY_STRPTIME(DepartureDate1, '%m/%d/%Y %H:%M') AS DepartureDate1,
-            TRY_STRPTIME(DepartureDate2, '%m/%d/%Y %H:%M') AS DepartureDate2,
-            TRY_STRPTIME(DepartureDate3, '%m/%d/%Y %H:%M') AS DepartureDate3,
-            TRY_STRPTIME(DepartureDate4, '%m/%d/%Y %H:%M') AS DepartureDate4,
-            TRY_STRPTIME(DepartureDate5, '%m/%d/%Y %H:%M') AS DepartureDate5,
-            TRY_STRPTIME(DepartureDate6, '%m/%d/%Y %H:%M') AS DepartureDate6,
-            TRY_STRPTIME(DepartureDate7, '%m/%d/%Y %H:%M') AS DepartureDate7,
-            TRY_STRPTIME(DepartureDate8, '%m/%d/%Y %H:%M') AS DepartureDate8,
+            COALESCE(
+                TRY_STRPTIME(DepartureDate1, '%m/%d/%Y %H:%M'),
+                TRY_STRPTIME(DepartureDate1, '%m/%d/%Y')
+            ) AS DepartureDate1,
+
+            COALESCE(
+                TRY_STRPTIME(DepartureDate2, '%m/%d/%Y %H:%M'),
+                TRY_STRPTIME(DepartureDate2, '%m/%d/%Y')
+            ) AS DepartureDate2,
+
+            COALESCE(
+                TRY_STRPTIME(DepartureDate3, '%m/%d/%Y %H:%M'),
+                TRY_STRPTIME(DepartureDate3, '%m/%d/%Y')
+            ) AS DepartureDate3,
+
+            COALESCE(
+                TRY_STRPTIME(DepartureDate4, '%m/%d/%Y %H:%M'),
+                TRY_STRPTIME(DepartureDate4, '%m/%d/%Y')
+            ) AS DepartureDate4,
+
+            COALESCE(
+                TRY_STRPTIME(DepartureDate5, '%m/%d/%Y %H:%M'),
+                TRY_STRPTIME(DepartureDate5, '%m/%d/%Y')
+            ) AS DepartureDate5,
+
+            COALESCE(
+                TRY_STRPTIME(DepartureDate6, '%m/%d/%Y %H:%M'),
+                TRY_STRPTIME(DepartureDate6, '%m/%d/%Y')
+            ) AS DepartureDate6,
+
+            COALESCE(
+                TRY_STRPTIME(DepartureDate7, '%m/%d/%Y %H:%M'),
+                TRY_STRPTIME(DepartureDate7, '%m/%d/%Y')
+            ) AS DepartureDate7,
+
+            COALESCE(
+                TRY_STRPTIME(DepartureDate8, '%m/%d/%Y %H:%M'),
+                TRY_STRPTIME(DepartureDate8, '%m/%d/%Y')
+            ) AS DepartureDate8,
 
         Airport1, Airport2, Airport3, Airport4, Airport5,
         Airport6, Airport7, Airport8, Airport9
