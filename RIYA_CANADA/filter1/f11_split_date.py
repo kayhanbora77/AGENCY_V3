@@ -25,19 +25,19 @@ from datetime import datetime
 # ============================================================================
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-SOURCE_TABLE = "GLOBALLEGENDS_RAW2"
-TARGET_TABLE = "GLOBALLEGENDS_SPLIT"
-REJECT_TABLE = "GLOBALLEGENDS_REJECT"
+SOURCE_TABLE = "RIYA_CANADA_RAW"
+TARGET_TABLE = "RIYA_CANADA_SPLIT"
+REJECT_TABLE = "RIYA_CANADA_REJECT"
 
-MAX_FLIGHTS = 4
-MAX_DATES = 4
-MAX_AIRPORTS = 5
+MAX_FLIGHTS = 8
+MAX_DATES = 8
+MAX_AIRPORTS = 9
 
 BATCH_SIZE = 200_000
 
-FLIGHT_PREFIX = "FLIGHT_NUMBER"
-DATE_PREFIX = "FLIGHT_DATE"
-AIRPORT_PREFIX ="AIRPORT"
+FLIGHT_PREFIX = "FlightNumber"
+DATE_PREFIX = "DepartureDate"
+AIRPORT_PREFIX ="Airport"
 
 # ============================================================================
 # COLUMN LISTS  —  match THOMASCOOK_RAW schema exactly
@@ -55,11 +55,10 @@ _RE_SCI_NOTATION = re.compile(r"^(\d+)(?:\.0+)?E\+?(\d+)$", re.IGNORECASE)
 _RE_FLTNO_WITH_SPACE = re.compile(r"^([A-Z]{1,3})\s+(\d+)$", re.IGNORECASE)  # Handle "G 217", "K 1475"
 
 STATIC_COLS = [
-    "AirlineCode",
-    "RBDsClass",
-    "CabinClass",
-    "PassangerType",
-    "PNR",    
+    "DocumentReferenceNo",
+    "PNRNo",
+    "PaxName",
+    "SupplierCode",
 ]
 
 COL_IDX: dict = {}

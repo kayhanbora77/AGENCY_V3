@@ -25,19 +25,19 @@ from datetime import datetime
 # ============================================================================
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-SOURCE_TABLE = "GLOBALLEGENDS_RAW2"
-TARGET_TABLE = "GLOBALLEGENDS_SPLIT"
-REJECT_TABLE = "GLOBALLEGENDS_REJECT"
+SOURCE_TABLE = "BABYLONTRAVELS_RAW2"
+TARGET_TABLE = "BABYLONTRAVELS_SPLIT"
+REJECT_TABLE = "BABYLONTRAVELS_REJECT"
 
-MAX_FLIGHTS = 4
-MAX_DATES = 4
-MAX_AIRPORTS = 5
+MAX_FLIGHTS = 2
+MAX_DATES = 2
+MAX_AIRPORTS = 3
 
 BATCH_SIZE = 200_000
 
-FLIGHT_PREFIX = "FLIGHT_NUMBER"
-DATE_PREFIX = "FLIGHT_DATE"
-AIRPORT_PREFIX ="AIRPORT"
+FLIGHT_PREFIX = "FlightNumber"
+DATE_PREFIX = "DepartureDate"
+AIRPORT_PREFIX ="Airport"
 
 # ============================================================================
 # COLUMN LISTS  —  match THOMASCOOK_RAW schema exactly

@@ -5,7 +5,7 @@ Rules
 -----
 1. count(FlightNo) > count(FlightDate)  → insert into TBO_REJECTION
 2. count(FlightNo) <= count(FlightDate) → trim to count(FlightNo) flights/dates,
-                                          keep other columns (DAIS, TRNN, etc.) unchanged
+                                           keep other columns (DAIS, TRNN, etc.) unchanged
 3. count(Airport)  = count(FlightNo) + 1 (trim airports accordingly)
 4. Any consecutive date gap > 1 day     → split at that boundary
    All consecutive date gaps <= 1 day   → do NOT split
@@ -25,90 +25,110 @@ from datetime import datetime
 # ============================================================================
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-SOURCE_TABLE = "RIYA_CANADA_RAW"
-TARGET_TABLE = "RIYA_CANADA_SPLIT"
-REJECT_TABLE = "RIYA_CANADA_REJECTED"
+SOURCE_TABLE = "TRAVELPACK_RAW"
+TARGET_TABLE = "TRAVELPACK_SPLIT"
+REJECT_TABLE = "TRAVELPACK_REJECT"
 
-MAX_FLIGHTS = 8
-MAX_DATES = 8
-MAX_AIRPORTS = 9
+MAX_FLIGHTS = 2
+MAX_DATES = 2
+MAX_AIRPORTS = 3
 
 BATCH_SIZE = 200_000
 
+FLIGHT_PREFIX = "FlightNumber"
+DATE_PREFIX = "DepartureDate"
+AIRPORT_PREFIX ="Airport"
+
 # ============================================================================
-# COLUMN LISTS  —  match RIYA_CANADA_RAW schema exactly
+# COLUMN LISTS  —  match THOMASCOOK_RAW schema exactly
 # ============================================================================
 
-FLIGHT_COLS = [f"FlightNumber{i + 1}" for i in range(MAX_FLIGHTS)]
-DATE_COLS = [f"DepartureDate{i + 1}" for i in range(MAX_DATES)]
-AIRPORT_COLS = [f"Airport{i + 1}" for i in range(MAX_AIRPORTS)]
+FLIGHT_COLS = [f"{FLIGHT_PREFIX}{i + 1}" for i in range(MAX_FLIGHTS)]  # FlightNumber1..4
+DATE_COLS = [
+    f"{DATE_PREFIX}{i + 1}" for i in range(MAX_DATES)
+]  # DepartureDate1..4
+AIRPORT_COLS = [f"{AIRPORT_PREFIX}{i + 1}" for i in range(MAX_AIRPORTS)]  # Airport1..5
 DYNAMIC_COLS = FLIGHT_COLS + DATE_COLS + AIRPORT_COLS
 
-_RE_FLTNO = re.compile(r"^[A-Z0-9]{2,3}\d+$")
+_RE_FLTNO = re.compile(r"^[A-Z]{2,3}\d+$")  # Fixed: only letters, not alphanumeric
+_RE_SCI_NOTATION = re.compile(r"^(\d+)(?:\.0+)?E\+?(\d+)$", re.IGNORECASE)
+_RE_FLTNO_WITH_SPACE = re.compile(r"^([A-Z]{1,3})\s+(\d+)$", re.IGNORECASE)  # Handle "G 217", "K 1475"
 
-STATIC_COLS = ["DocumentReferenceNo", "PNRNo", "PaxName", "SupplierCode"]
+STATIC_COLS = [
+    "PaxName",
+    "AirlineBooking",
+    "Airline",
+    "ETicketNo",
+    "Direction",    
+    "TpackRef"
+]
 
 COL_IDX: dict = {}
-
-
 # ============================================================================
 # HELPERS
 # ============================================================================
 
 
 def _isna(val) -> bool:
-    """True if val is None, NaN, or blank-after-strip."""
-    if val is None:
+    """True if val is None, NaN, pd.NaT, or blank/NaT string after strip."""
+    if val is None or pd.isna(val):
         return True
-    if isinstance(val, float) and math.isnan(val):
-        return True
-    if isinstance(val, str) and val.strip() == "":
+    if isinstance(val, str) and val.strip().lower() in ("", "nat", "none", "nan"):
         return True
     return False
 
 
+def is_valid(val):
+    if val is None or pd.isna(val):
+        return False
+    if isinstance(val, str):
+        s = val.strip().lower()
+        return s not in ("", "nat", "none", "nan")
+    return True
+
+
+def _fix_scientific_notation(fn: str) -> str:
+    """Collapse Excel-mangled scientific notation, e.g. '6.00E+78' -> '6E78'."""
+    if not isinstance(fn, str):
+        fn = str(fn)
+    m = _RE_SCI_NOTATION.fullmatch(fn.strip())
+    if not m:
+        return fn
+    mantissa, exponent = m.group(1), m.group(2)
+    return f"{mantissa}E{exponent}"
+
+
 def normalize_flight_numbers(row: dict) -> dict:
     """
-    Build correct flight numbers using:
-        SupplierCode + FlightNumber{i}
-
-    Example:
-        SupplierCode = "AC"
-        FlightNumber1 = "6664" => AC6664
+    Normalize flight numbers:
+    - Remove spaces: "G 217" -> "G217", "K 1475" -> "K1475"
+    - Strip leading zeros: "SV0020" -> "SV20"
+    - Fix scientific notation: "6.00E+78" -> "6E78"
     """
-
     row = dict(row)
-
-    supplier = row.get("SupplierCode")
-
-    if _isna(supplier):
-        return row
-
-    supplier = str(supplier).strip().upper()
-
     for i in range(1, MAX_FLIGHTS + 1):
-        col = f"FlightNumber{i}"
-        fn = row.get(col)
-
-        if _isna(fn):
-            continue
-
-        fn_str = str(fn).strip().upper()
-
-        # already valid like TK123
-        if _RE_FLTNO.fullmatch(fn_str):
-            row[col] = _normalize_flightno(fn_str)
-            continue
-
-        # remove spaces/hyphens
-        fn_digits = re.sub(r"[^0-9]", "", fn_str)
-
-        if not fn_digits:
-            continue
-
-        combined = f"{supplier}{fn_digits}"
-        row[col] = _normalize_flightno(combined)
-
+        fn = row.get(f"{FLIGHT_PREFIX}{i}")
+        if not _isna(fn):
+            fn_str = str(fn).strip()
+            
+            # Fix scientific notation first
+            fn_str = _fix_scientific_notation(fn_str)
+            
+            # Remove spaces between letters and numbers: "G 217" -> "G217"
+            fn_str = re.sub(r'\s+', '', fn_str)
+            
+            fn_upper = fn_str.upper()
+            
+            # Check if it matches the pattern with space removed
+            if _RE_FLTNO.fullmatch(fn_upper):
+                row[f"{FLIGHT_PREFIX}{i}"] = _normalize_flightno(fn_upper)
+            else:
+                # Try to extract airline code and number even if format is slightly off
+                normalized = _normalize_any_flightno(fn_upper)
+                if normalized:
+                    row[f"{FLIGHT_PREFIX}{i}"] = normalized
+                else:
+                    row[f"{FLIGHT_PREFIX}{i}"] = fn_upper
     return row
 
 
@@ -117,7 +137,7 @@ def _normalize_flightno(fn: str) -> str:
     Remove leading zeros between the alphabetic prefix and the numeric suffix.
     E.g.  SV0020 → SV20,  AF0459 → AF459,  EK001 → EK1
     """
-    m = re.fullmatch(r"([A-Z0-9]{2,3}?)(\d+)", fn.upper().strip())
+    m = re.fullmatch(r"([A-Z]{2,3})(\d+)", fn.upper().strip())
     if not m:
         return fn
     prefix, digits = m.group(1), m.group(2)
@@ -125,17 +145,62 @@ def _normalize_flightno(fn: str) -> str:
     return prefix + normalized_digits
 
 
+def _normalize_any_flightno(fn: str) -> str:
+    """
+    Normalize any flight number format:
+    - "G217" -> "G217" (already normalized)
+    - "G 217" -> "G217"
+    - "K1475" -> "K1475"
+    - "SV0020" -> "SV20"
+    - "EK001" -> "EK1"
+    """
+    if not fn:
+        return None
+    
+    # Remove all spaces
+    fn = re.sub(r'\s+', '', fn)
+    
+    # Try to match pattern: letters followed by digits
+    m = re.fullmatch(r"([A-Z]{1,3})(\d+)", fn)
+    if m:
+        prefix, digits = m.group(1), m.group(2)
+        # Remove leading zeros from digits
+        normalized_digits = digits.lstrip("0") or "0"
+        return prefix + normalized_digits
+    
+    return None
+
+
 def parse_dt(val):
-    if val is None:
+    """
+    Robustly parse datetime strings. 
+    Handles formats like '2019-01-01 - 00:45' by extracting the YYYY-MM-DD prefix.
+    """
+    if val is None or pd.isna(val):
         return None
     if isinstance(val, datetime):
         return val
-    s = str(val).strip()[:19]
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+    
+    s = str(val).strip()
+    if not s or s.lower() in ("nat", "none", "nan"):
+        return None
+
+    # 1. Extract YYYY-MM-DD using regex to handle formats like "2019-01-01 - 00:45"
+    m = re.match(r"(\d{4}-\d{2}-\d{2})", s)
+    if m:
         try:
-            return datetime.strptime(s, fmt)
+            return datetime.strptime(m.group(1), "%Y-%m-%d")
         except ValueError:
             pass
+
+    # 2. Fallback for other standard formats
+    s_trimmed = s[:19]
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y-%m-%d - %H:%M"):
+        try:
+            return datetime.strptime(s_trimmed, fmt)
+        except ValueError:
+            pass
+            
     return None
 
 
@@ -143,61 +208,59 @@ def day_gap(d1, d2):
     a, b = parse_dt(d1), parse_dt(d2)
     if a is None or b is None:
         return None
-    return abs((b - a).days)
-
-
-def is_valid(val):
-    if val is None:
-        return False
-    if isinstance(val, float):
-        return not math.isnan(val)
-    if isinstance(val, str):
-        return val.strip() != ""
-    return True
+    return abs((b.date() - a.date()).days)
 
 
 # ============================================================================
 # RULE 1 & 2: count flights vs dates, then trim
 # ============================================================================
 
-
 def extract_and_validate(row_list):
     """
     Returns:
-        "reject"  — count(FlightNumber) > count(DepartureDate)  [Rule 1]
-        flights   — list of (FlightNumber, DepartureDate) tuples [Rule 2]
+        flights   — list of (FlightNo, DepartureDate) tuples [Rule 2]
         airports  — list of airport strings                            [Rule 3]
+        cnt_no    — count of flights
+        is_reject — boolean indicating if row should be rejected      [Rule 1]
+        reject_reason — reason string if rejected, else None
     """
     flight_nos = []
     for i in range(MAX_FLIGHTS):
-        v = row_list[COL_IDX[f"FlightNumber{i + 1}"]]  # ← was FlightNo{i+1}
+        v = row_list[COL_IDX[f"{FLIGHT_PREFIX}{i + 1}"]]
         if is_valid(v):
-            flight_nos.append(v.strip() if isinstance(v, str) else str(v))
+            flight_nos.append(str(v).strip())
 
     flight_dates = []
     for i in range(MAX_DATES):
-        v = row_list[COL_IDX[f"DepartureDate{i + 1}"]]  # ← was FlightDate{i+1}
+        v = row_list[COL_IDX[f"{DATE_PREFIX}{i + 1}"]]
         if is_valid(v):
-            flight_dates.append(v.strip() if isinstance(v, str) else str(v))
+            flight_dates.append(str(v).strip())
 
     cnt_no = len(flight_nos)
     cnt_date = len(flight_dates)
 
+    # Rule 1: reject if more flights than dates
     if cnt_no > cnt_date:
-        return "reject", None, None
+        return None, None, cnt_no, True, f"ROUTE_OVERFLOW: {cnt_no} flights > {cnt_date} dates"
 
+    # Rule 2: trim dates to match flight count
     trimmed_dates = flight_dates[:cnt_no]
     flights = list(zip(flight_nos, trimmed_dates))
 
+    # Rule 3: trim airports to flight count + 1
     all_airports = []
     for i in range(MAX_AIRPORTS):
-        v = row_list[COL_IDX[f"Airport{i + 1}"]]
+        v = row_list[COL_IDX[f"{AIRPORT_PREFIX}{i + 1}"]]
         if is_valid(v):
-            all_airports.append(v.strip() if isinstance(v, str) else str(v))
+            all_airports.append(str(v).strip())
 
-    airports = all_airports[: cnt_no + 1]
+    airports = all_airports[:cnt_no + 1] if cnt_no > 0 else []
 
-    return flights, airports, cnt_no
+    # NEW: Reject if no flight numbers at all (but dates/airports may exist)
+    if cnt_no == 0:
+        return None, None, 0, True, "NO_VALID_FLIGHT_NUMBERS"
+
+    return flights, airports, cnt_no, False, None
 
 
 # ============================================================================
@@ -227,13 +290,13 @@ def build_child_row(parent_list, flights_slice, airports_slice, parent_id):
         child[COL_IDX[c]] = None
 
     for i, (fn, fd) in enumerate(flights_slice):
-        child[COL_IDX[f"FlightNumber{i + 1}"]] = fn  # ← was FlightNo{i+1}
-        child[COL_IDX[f"DepartureDate{i + 1}"]] = fd  # ← was FlightDate{i+1}
+        child[COL_IDX[f"{FLIGHT_PREFIX}{i + 1}"]] = fn
+        child[COL_IDX[f"{DATE_PREFIX}{i + 1}"]] = fd
 
     for i, ap in enumerate(airports_slice):
-        child[COL_IDX[f"Airport{i + 1}"]] = ap
+        child[COL_IDX[f"{AIRPORT_PREFIX}{i + 1}"]] = ap
 
-    child[COL_IDX["id"]] = str(uuid.uuid4())
+    child[COL_IDX["Id"]] = str(uuid.uuid4())
     child[COL_IDX["ParentId"]] = str(parent_id)
 
     return child
@@ -248,6 +311,7 @@ def process_batch(rows_df, all_cols):
     unsplit_rows = []
     child_rows = []
     rejection_rows = []
+    rejection_reasons = []  # NEW: parallel list for reasons
 
     records = rows_df.values.tolist()
 
@@ -257,30 +321,35 @@ def process_batch(rows_df, all_cols):
         row_dict = normalize_flight_numbers(row_dict)
         row_list = [row_dict[c] for c in all_cols]
 
-        result, airports, cnt_no = extract_and_validate(row_list)
+        flights, airports, cnt_no, is_reject, reject_reason = extract_and_validate(row_list)
 
-        if result == "reject":
+        # Rule 1 (or no flights): reject
+        if is_reject:
             rejection_rows.append(list(row_list))
+            rejection_reasons.append(reject_reason)  # NEW
             continue
 
-        flights = result
-
+        # Create trimmed row with only valid flights/dates/airports
         trimmed_row = list(row_list)
         for c in DYNAMIC_COLS:
             trimmed_row[COL_IDX[c]] = None
+            
         for i, (fn, fd) in enumerate(flights):
-            trimmed_row[COL_IDX[f"FlightNumber{i + 1}"]] = fn  # ← was FlightNo
-            trimmed_row[COL_IDX[f"DepartureDate{i + 1}"]] = fd  # ← was FlightDate
+            trimmed_row[COL_IDX[f"{FLIGHT_PREFIX}{i + 1}"]] = fn
+            trimmed_row[COL_IDX[f"{DATE_PREFIX}{i + 1}"]] = fd
+            
         for i, ap in enumerate(airports):
-            trimmed_row[COL_IDX[f"Airport{i + 1}"]] = ap
+            trimmed_row[COL_IDX[f"{AIRPORT_PREFIX}{i + 1}"]] = ap
 
+        # Rule 4: check for splits
         split_points = find_split_points(flights)
 
         if not split_points:
             unsplit_rows.append(trimmed_row)
             continue
 
-        parent_id = row_list[COL_IDX["id"]]
+        # Split the row
+        parent_id = row_list[COL_IDX["Id"]]
         boundaries = [0] + split_points + [len(flights)]
 
         for k in range(len(boundaries) - 1):
@@ -290,7 +359,7 @@ def process_batch(rows_df, all_cols):
             a_end = f_end + 1
 
             seg_flights = flights[f_start:f_end]
-            seg_airports = airports[a_start : min(a_end, len(airports))]
+            seg_airports = airports[a_start:min(a_end, len(airports))]
 
             if not seg_flights:
                 continue
@@ -302,12 +371,20 @@ def process_batch(rows_df, all_cols):
     empty = pd.DataFrame(columns=all_cols)
     unsplit_df = pd.DataFrame(unsplit_rows, columns=all_cols) if unsplit_rows else empty
     children_df = pd.DataFrame(child_rows, columns=all_cols) if child_rows else empty
-    rejection_df = (
-        pd.DataFrame(rejection_rows, columns=all_cols) if rejection_rows else empty
-    )
+    
+    # Build rejection_df with reasons
+    if rejection_rows:
+        rejection_df = pd.DataFrame(rejection_rows, columns=all_cols)
+        rejection_df["RejectionReason"] = rejection_reasons
+    else:
+        rejection_df = pd.DataFrame(columns=all_cols + ["RejectionReason"])
+
+    # Clean pd.NaT and string "NaT" values so DuckDB receives proper NULLs
+    for df in (unsplit_df, children_df, rejection_df):
+        if not df.empty:
+            df.replace({pd.NaT: None, "NaT": None, "nat": None, "NaN": None}, inplace=True)
 
     return unsplit_df, children_df, rejection_df
-
 
 # ============================================================================
 # DB HELPERS
@@ -342,7 +419,8 @@ def ensure_rejection_table(con, source_table, reject_table):
     con.execute(
         f'CREATE TABLE "{reject_table}" AS SELECT * FROM "{source_table}" WHERE 1=0'
     )
-    print(f"  Recreated table '{reject_table}'.")
+    con.execute(f'ALTER TABLE "{reject_table}" ADD COLUMN "RejectionReason" VARCHAR')
+    print(f"  Recreated table '{reject_table}' with RejectionReason column.")
 
 
 # ============================================================================
@@ -401,11 +479,13 @@ def process_table(db_path=DB_PATH, table=SOURCE_TABLE, batch_size=BATCH_SIZE):
             split_count += children_df["ParentId"].nunique()
 
         if not rejection_df.empty:
+            rej_cols = all_cols + ["RejectionReason"]
+            rej_col_list = ", ".join(f'"{c}"' for c in rej_cols)
             con.execute(
-                f'INSERT INTO "{REJECT_TABLE}" ({col_list}) SELECT * FROM rejection_df'
+                f'INSERT INTO "{REJECT_TABLE}" ({rej_col_list}) SELECT * FROM rejection_df'
             )
             reject_count += len(rejection_df)
-
+            
         elapsed = time.time() - t0
         scanned = unsplit_total + split_count + reject_count
         rate = scanned / elapsed if elapsed > 0 else 0

@@ -21,6 +21,7 @@ import pandas as pd
 # ----------------------------------------------------------------------
 # CONFIG
 # ----------------------------------------------------------------------
+
 CSV_PATH = r"C:\Users\cagri\Desktop\Agency_Data\TravelPack\filter0\Travel Pack UK - C2R Format.csv"
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
 TABLE_NAME = "TRAVELPACK_RAW"        # target table name
@@ -174,11 +175,6 @@ def main():
     df = process_flight_columns(df)
     df = parse_dates(df)
 
-    print(df[[
-        "Id", "FlightNumber1", "AirlineCode1", "FlightNumber1_Clean",
-        "FlightNumber2", "AirlineCode2", "FlightNumber2_Clean",
-        "DepartureDate1", "DepartureDate2",
-    ]].to_string())
 
     insert_into_duckdb(df, DB_PATH, TABLE_NAME)
 
