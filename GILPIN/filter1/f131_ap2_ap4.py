@@ -9,12 +9,12 @@ import pandas as pd
 # ============================================================================
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-SOURCE_TABLE = "GILPIN_SPLIT"
-TARGET_TABLE = "GILPIN_SPLIT2"
+SOURCE_TABLE = "GILPIN_SPLIT2"
+TARGET_TABLE = "GILPIN_SPLIT3"
 
-MAX_FLIGHTS = 7
-MAX_DATES = 7
-MAX_AIRPORTS = 8
+MAX_FLIGHTS = 4
+MAX_DATES = 4
+MAX_AIRPORTS = 5
 
 BATCH_SIZE = 200_000
 
