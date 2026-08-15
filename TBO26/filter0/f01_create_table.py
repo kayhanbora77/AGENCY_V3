@@ -96,7 +96,6 @@ def build_airport_expr(col: str) -> str:
     # otherwise the trimmed airport code is kept.
     return f"NULLIF(TRIM({col_esc}), '') AS {col_esc}"
 
-
 def main():
     con = duckdb.connect(DB_PATH)
 
@@ -104,7 +103,7 @@ def main():
 
     all_cols, encoding = try_read_header(con, CSV_PATH)
 
-    select_parts = []
+    select_parts = ["uuid() AS Id"]
     for col in all_cols:
         col_esc = f'"{col}"'
         if col in FLIGHT_DATE_COLS:
@@ -116,6 +115,7 @@ def main():
 
     select_sql = ",\n    ".join(select_parts)
 
+    # Create the table without the PK constraint
     create_sql = f"""
         CREATE TABLE {TABLE_NAME} AS
         SELECT
@@ -130,10 +130,13 @@ def main():
     """
     con.execute(create_sql)
 
+    # Add the primary key constraint to the Id column
+    con.execute(f"ALTER TABLE {TABLE_NAME} ADD PRIMARY KEY (Id)")
+
     row_count = con.execute(f"SELECT COUNT(*) FROM {TABLE_NAME}").fetchone()[0]
     print(f"Loaded {row_count} rows into {TABLE_NAME}")
 
-    # Sanity check: compare raw non-empty count vs parsed-NULL count per date column
+    # Sanity checks (unchanged)
     for col in FLIGHT_DATE_COLS:
         if col not in all_cols:
             print(f"WARNING: {col} not found in source CSV, skipping")
@@ -143,7 +146,6 @@ def main():
         ).fetchone()[0]
         print(f"{col}: {parsed_null} NULL after parsing (out of {row_count} rows)")
 
-    # Sanity check: how many Airport1-8 cells ended up NULL after trimming
     for col in AIRPORT_COLS:
         if col not in all_cols:
             print(f"WARNING: {col} not found in source CSV, skipping")
