@@ -9,8 +9,8 @@ import pandas as pd
 # ============================================================================
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-SOURCE_TABLE = "THOMASCOOK_SPLIT6"
-TARGET_TABLE = "THOMASCOOK_SPLIT7"
+SOURCE_TABLE = "RIYA_USA_SPLIT5"
+TARGET_TABLE = "RIYA_USA_SPLIT6"
 
 MAX_FLIGHTS = 8
 MAX_DATES = 8
@@ -19,13 +19,13 @@ MAX_AIRPORTS = 9
 BATCH_SIZE = 200_000
 
 AP2_AP4_WHERE_CLAUSE = """
-WHERE ((AIRPORT2 = AIRPORT4) AND (AIRPORT5 IS NOT NULL) AND (AIRPORT6 IS NULL))
+WHERE AIRPORT2=AIRPORT4
 """
 
 # ============================================================================
 # COLUMN LISTS
 # ============================================================================
-PREFIX_FN="FlightNo"
+PREFIX_FN="FlightNumber"
 PREFIX_DATE="DepartureDate"
 PREFIX_AP="Airport"
 
@@ -66,11 +66,11 @@ def get_flights_airports(row_list):
 
 def find_all_split_points(flights, airports):
     """
-    Rule 1 — Exactly 4 flights, Airport2 == Airport4:
-        e.g. BOM → BKK → PNH → BKK → BOM
+    Rule 1 — Exactly 3 flights, Airport2 == Airport4:
+        e.g. BOS → ORD → XNA → ORD
         Split into:
-          Segment 1: FlightNumber1,FlightNumber2 | Airport1 → Airport2 → Airport3
-          Segment 2: FlightNumber3,FlightNumber4 | Airport3 → Airport4 → Airport5
+          Segment 1: FlightNumber1,FlightNumber2 | Airport1 → Airport2 → Airport3 
+          Segment 2: FlightNumber3 | Airport3 → Airport4
     """
     n_f = len(flights)
     n_a = len(airports)
@@ -80,9 +80,9 @@ def find_all_split_points(flights, airports):
 
     split_points = set()
 
-    # ── Rule 1: exactly 4 flights and Airport2 == Airport4 ───────────────────
-    if n_f == 4 and n_a == 5 and airports[1] == airports[3]:
-        split_points.add(2)
+    # ── Rule 1: exactly 3 flights and Airport2 == Airport4 ───────────────────
+    if n_f == 3 and n_a == 4 and airports[1] == airports[3]:
+        split_points.add(1)
 
     return sorted(split_points)
 
@@ -100,7 +100,7 @@ def build_child_list(parent_list, all_cols, flights_slice, airports_slice, paren
     for i, ap in enumerate(airports_slice):
         child[COL_IDX[f"{PREFIX_AP}{i + 1}"]] = ap
 
-    child[COL_IDX["id"]] = str(uuid.uuid4())
+    child[COL_IDX["Id"]] = str(uuid.uuid4())
     child[COL_IDX["ParentId"]] = str(parent_id)
 
     return child
@@ -124,7 +124,7 @@ def process_batch(rows_df, all_cols):
             unsplit_rows.append(list(row_list))
             continue
 
-        parent_id = row_list[COL_IDX["id"]]
+        parent_id = row_list[COL_IDX["Id"]]
         boundaries = [0] + split_points + [len(flights)]
 
         for k in range(len(boundaries) - 1):
@@ -245,7 +245,7 @@ def process_table(db_path=DB_PATH, table=SOURCE_TABLE, batch_size=BATCH_SIZE):
         batch_df = pd.DataFrame(raw, columns=all_cols)
         unsplit_df, children_df = process_batch(batch_df, all_cols)
 
-        # Unsplit rows (Airport1 != Airport3) already exist in TARGET — skip
+        # Unsplit rows (Airport2 != Airport4) already exist in TARGET — skip
         unsplit_total += len(unsplit_df)
 
         if not children_df.empty:

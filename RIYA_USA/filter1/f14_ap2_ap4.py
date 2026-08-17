@@ -9,8 +9,8 @@ import pandas as pd
 # ============================================================================
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-SOURCE_TABLE = "THOMASCOOK_SPLIT6"
-TARGET_TABLE = "THOMASCOOK_SPLIT7"
+SOURCE_TABLE = "RIYA_USA_SPLIT3"
+TARGET_TABLE = "RIYA_USA_SPLIT4"
 
 MAX_FLIGHTS = 8
 MAX_DATES = 8
@@ -25,7 +25,7 @@ WHERE ((AIRPORT2 = AIRPORT4) AND (AIRPORT5 IS NOT NULL) AND (AIRPORT6 IS NULL))
 # ============================================================================
 # COLUMN LISTS
 # ============================================================================
-PREFIX_FN="FlightNo"
+PREFIX_FN="FlightNumber"
 PREFIX_DATE="DepartureDate"
 PREFIX_AP="Airport"
 
@@ -100,7 +100,7 @@ def build_child_list(parent_list, all_cols, flights_slice, airports_slice, paren
     for i, ap in enumerate(airports_slice):
         child[COL_IDX[f"{PREFIX_AP}{i + 1}"]] = ap
 
-    child[COL_IDX["id"]] = str(uuid.uuid4())
+    child[COL_IDX["Id"]] = str(uuid.uuid4())
     child[COL_IDX["ParentId"]] = str(parent_id)
 
     return child
@@ -124,7 +124,7 @@ def process_batch(rows_df, all_cols):
             unsplit_rows.append(list(row_list))
             continue
 
-        parent_id = row_list[COL_IDX["id"]]
+        parent_id = row_list[COL_IDX["Id"]]
         boundaries = [0] + split_points + [len(flights)]
 
         for k in range(len(boundaries) - 1):
