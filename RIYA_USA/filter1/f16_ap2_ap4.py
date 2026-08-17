@@ -21,7 +21,6 @@ BATCH_SIZE = 200_000
 AP2_AP4_WHERE_CLAUSE = """
 WHERE AIRPORT2=AIRPORT4
 """
-
 # ============================================================================
 # COLUMN LISTS
 # ============================================================================
@@ -40,6 +39,16 @@ COL_IDX: dict = {}
 # ============================================================================
 # ROW-LEVEL SPLIT LOGIC
 # ============================================================================
+def _is_blank(v):
+    """True for None, NaN/NaT, and whitespace-only strings."""
+    if v is None:
+        return True
+    try:
+        if pd.isna(v):
+            return True
+    except (TypeError, ValueError):
+        pass
+    return str(v).strip() == ""
 
 
 def get_flights_airports(row_list):
@@ -47,18 +56,13 @@ def get_flights_airports(row_list):
     for i in range(MAX_FLIGHTS):
         fn = row_list[COL_IDX[f"{PREFIX_FN}{i + 1}"]]
         fd = row_list[COL_IDX[f"{PREFIX_DATE}{i + 1}"]]
-        if (
-            fn is not None
-            and fd is not None
-            and str(fn).strip() != ""
-            and str(fd).strip() != ""
-        ):
+        if not _is_blank(fn) and not _is_blank(fd):
             flights.append((str(fn).strip(), str(fd).strip()))
 
     airports = []
     for c in AIRPORT_COLS:
         v = row_list[COL_IDX[c]]
-        if v is not None and str(v).strip() != "":
+        if not _is_blank(v):
             airports.append(str(v).strip())
 
     return flights, airports
@@ -67,14 +71,14 @@ def get_flights_airports(row_list):
 def find_all_split_points(flights, airports):
     """
     Rule 1 — Exactly 3 flights, Airport2 == Airport4:
-        e.g. BOS → ORD → XNA → ORD
+        e.g. AMS → LHR → EWR → LHR
         Split into:
           Segment 1: FlightNumber1,FlightNumber2 | Airport1 → Airport2 → Airport3 
           Segment 2: FlightNumber3 | Airport3 → Airport4
     """
     n_f = len(flights)
     n_a = len(airports)
-
+    print("Counts Flights and Airports:",n_f,n_a)
     if n_f < 2:
         return []
 
@@ -82,7 +86,8 @@ def find_all_split_points(flights, airports):
 
     # ── Rule 1: exactly 3 flights and Airport2 == Airport4 ───────────────────
     if n_f == 3 and n_a == 4 and airports[1] == airports[3]:
-        split_points.add(1)
+        print(f"  FOUND 3-FLIGHT ROW TO SPLIT: {flights} | {airports}")
+        split_points.add(2)  # Split AFTER flight 2 (index 2)
 
     return sorted(split_points)
 
@@ -217,13 +222,13 @@ def process_table(db_path=DB_PATH, table=SOURCE_TABLE, batch_size=BATCH_SIZE):
     total_source = con.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
     print(f"  Copied {total_source:,} rows into '{TARGET_TABLE}'.")
 
-    # ── Step 2: Count only the 4-flight rows to process ──────────────────────
+    # ── Step 2: Count only the 3-flight rows to process ──────────────────────
     filtered_total = con.execute(f"""
         SELECT COUNT(*)
         FROM "{table}"
         {AP2_AP4_WHERE_CLAUSE}
     """).fetchone()[0]
-    print(f"\n  Step 2: Processing {filtered_total:,} 4-flight rows for split...")
+    print(f"\n  Step 2: Processing {filtered_total:,} 3-flight rows for split...")
 
     unsplit_total = 0
     split_count = 0
@@ -245,7 +250,7 @@ def process_table(db_path=DB_PATH, table=SOURCE_TABLE, batch_size=BATCH_SIZE):
         batch_df = pd.DataFrame(raw, columns=all_cols)
         unsplit_df, children_df = process_batch(batch_df, all_cols)
 
-        # Unsplit rows (Airport2 != Airport4) already exist in TARGET — skip
+        # Unsplit rows (Airport1 != Airport3) already exist in TARGET — skip
         unsplit_total += len(unsplit_df)
 
         if not children_df.empty:
@@ -276,7 +281,7 @@ def process_table(db_path=DB_PATH, table=SOURCE_TABLE, batch_size=BATCH_SIZE):
         id_df = pd.DataFrame({"pid": split_parent_ids})
         con.execute(f"""
             DELETE FROM "{TARGET_TABLE}"
-            WHERE CAST(id AS VARCHAR) IN (SELECT pid FROM id_df)
+            WHERE CAST(Id AS VARCHAR) IN (SELECT pid FROM id_df)
         """)
         print(
             f"  Deleted {len(split_parent_ids):,} original rows from '{TARGET_TABLE}'."

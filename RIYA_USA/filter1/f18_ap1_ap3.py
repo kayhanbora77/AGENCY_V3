@@ -9,8 +9,8 @@ import pandas as pd
 # ============================================================================
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-SOURCE_TABLE = "RIYA_USA_SPLIT4"
-TARGET_TABLE = "RIYA_USA_SPLIT5"
+SOURCE_TABLE = "RIYA_USA_SPLIT7"
+TARGET_TABLE = "RIYA_USA_SPLIT8"
 
 MAX_FLIGHTS = 8
 MAX_DATES = 8
@@ -18,10 +18,9 @@ MAX_AIRPORTS = 9
 
 BATCH_SIZE = 200_000
 
-AP1_AP3_WHERE_CLAUSE = """
-WHERE AIRPORT1=AIRPORT3 AND AIRPORT4 IS NOT NULL
+AP2_AP4_WHERE_CLAUSE = """
+WHERE AIRPORT1=AIRPORT3 AND  AIRPORT4 IS NULL
 """
-
 # ============================================================================
 # COLUMN LISTS
 # ============================================================================
@@ -71,11 +70,11 @@ def get_flights_airports(row_list):
 
 def find_all_split_points(flights, airports):
     """
-    Rule 1 — Exactly 3 flights, Airport1 == Airport3:
-        e.g. ORD → CWA → ORD → MLI
+    Rule 1 — Exactly 2 flights, Airport1 == Airport3:
+        e.g. BUF → DFW → BUF 
         Split into:
           Segment 1: FlightNumber1 | Airport1 → Airport2 
-          Segment 2: FlightNumber2,FlightNumber3 | Airport2 → Airport3 → Airport4
+          Segment 2: FlightNumber2 | Airport2 → Airport3 
     """
     n_f = len(flights)
     n_a = len(airports)
@@ -85,8 +84,8 @@ def find_all_split_points(flights, airports):
 
     split_points = set()
 
-    # ── Rule 1: exactly 3 flights and Airport1 == Airport3 ───────────────────
-    if n_f == 3 and n_a == 4 and airports[0] == airports[2]:
+    # ── Rule 1: exactly 2 flights and Airport1 == Airport3 ───────────────────
+    if n_f == 2 and n_a == 3 and airports[0] == airports[2]:
         print(f"  FOUND 3-FLIGHT ROW TO SPLIT: {flights} | {airports}")
         split_points.add(1)  # Split AFTER flight 1 (index 1)
 
@@ -227,7 +226,7 @@ def process_table(db_path=DB_PATH, table=SOURCE_TABLE, batch_size=BATCH_SIZE):
     filtered_total = con.execute(f"""
         SELECT COUNT(*)
         FROM "{table}"
-        {AP1_AP3_WHERE_CLAUSE}
+        {AP2_AP4_WHERE_CLAUSE}
     """).fetchone()[0]
     print(f"\n  Step 2: Processing {filtered_total:,} 3-flight rows for split...")
 
@@ -240,7 +239,7 @@ def process_table(db_path=DB_PATH, table=SOURCE_TABLE, batch_size=BATCH_SIZE):
     cursor.execute(f"""
         SELECT {col_list}
         FROM "{table}"
-        {AP1_AP3_WHERE_CLAUSE}
+        {AP2_AP4_WHERE_CLAUSE}
     """)
 
     while True:
