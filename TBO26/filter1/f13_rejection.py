@@ -18,6 +18,7 @@ Rejection Rules
 7.  FlightNo bad format (1-3 alpha + digits)    → FN_BAD_FORMAT
 8.  AirlineCode not 2-3 letters                 → AC_BAD_FORMAT
 9.  Airport not exactly 3 letters               → AP_BAD_FORMAT
+10. FlightDate out of chronological order       → FD_DECREASING
 """
 
 import duckdb
@@ -97,6 +98,7 @@ class Reason(str, Enum):
     FD_EMPTY = "FlightDate EMPTY"
     FD_BAD_FORMAT = "FlightDate BAD_FORMAT"
     FD_OUT_OF_RANGE = "FlightDate OUT_OF_RANGE"
+    FD_DECREASING = "FlightDate OUT_OF_CHRONOLOGICAL_ORDER"
     ROUTE_OVERFLOW = "ROUTE OVERFLOW"
     DUPLICATE_SEGMENT = "DUPLICATE SEGMENT"
     BATCH_DUPLICATE = "BATCH DUPLICATE"
@@ -366,6 +368,47 @@ def check_flightdate_format_and_range(row):
     return False, None
 
 
+def check_flightdate_chronology(row):
+    """
+    Rule 10 — FlightDate slots must be non-decreasing in slot order.
+
+    Only slots that are actually populated are compared (blank/NaN slots
+    are skipped, so gaps from earlier splitting don't trigger a false
+    positive). If any populated FlightDate is earlier than the previous
+    populated FlightDate, the row is rejected.
+
+    Example rejected case:
+        FlightDate3 = 2026-05-24 18:55:00
+        FlightDate4 = 2026-05-23 17:35:00   <- earlier than FlightDate3
+    """
+    reasons = []
+    prev_dt = None
+    prev_idx = None
+
+    for i in range(1, MAX_FLIGHTS + 1):
+        dt = row.get(f"{DATE_PREFIX}{i}")
+        if _isna(dt):
+            continue
+
+        parsed = dt if isinstance(dt, datetime) else _parse_date(dt)
+        if parsed is None:
+            # Malformed dates are already caught by check_flightdate_format_and_range
+            continue
+
+        if prev_dt is not None and parsed < prev_dt:
+            reasons.append(
+                f"Slot{prev_idx}->Slot{i}: {Reason.FD_DECREASING} "
+                f"({DATE_PREFIX}{prev_idx}={prev_dt} > {DATE_PREFIX}{i}={parsed})"
+            )
+
+        prev_dt = parsed
+        prev_idx = i
+
+    if reasons:
+        return True, "; ".join(reasons)
+    return False, None
+
+
 def check_airline_code(row):
     if AIRLINE_ALPHA_COL is None:
         return False, None
@@ -496,6 +539,7 @@ _CHECKS = [
     check_consecutive_duplicate_flightno,
     check_route_overflow,
     check_flightdate_format_and_range,
+    check_flightdate_chronology,
     check_airline_code,
     check_airport,
 ]
