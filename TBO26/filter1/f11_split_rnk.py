@@ -2,6 +2,7 @@ import duckdb
 import pandas as pd
 import numpy as np
 import uuid
+import re
 
 # ============================================================
 # CONFIG
@@ -12,7 +13,16 @@ DB_PATH = r"C:\DuckDB\my_db.duckdb"
 SOURCE_TABLE = "TBO26_RAW"
 TARGET_TABLE = "TBO26_SPLIT"
 
-DUMMY_FLIGHTS = {"QR000", "000", ""}
+# Manual override set for dummy flight numbers that DON'T follow the
+# "<letters><zeros>" pattern (e.g. "XX999"). Empty by default because
+# QR000 / 000 / "" are already caught by is_dummy_flight()'s blank
+# check + zero-pattern regex below. Add entries here only if you find
+# a dummy code that regex can't catch.
+DUMMY_FLIGHTS = set()
+
+# Airport code used as a placeholder to mark a surface/ground sector
+# (e.g. LHR -> RNK -> CDG means "surface travel between LHR and CDG").
+SURFACE_AIRPORT = "RNK"
 
 STATIC_COLS = [
     "PaxName",
@@ -25,6 +35,11 @@ STATIC_COLS = [
 
 MAX_LEGS = 7
 
+# Matches an optional letter prefix followed by an all-zero number,
+# e.g. "000", "QR000", "EK000", "EY000", "VN000", "AB0000"
+_ZERO_FLIGHT_RE = re.compile(r"^[A-Z]*0+$")
+
+
 # ============================================================
 # HELPERS
 # ============================================================
@@ -32,12 +47,40 @@ MAX_LEGS = 7
 def is_dummy_flight(flight_number):
     """
     Returns True for dummy/surface-sector flight numbers.
+
+    A flight number is considered "dummy" if:
+      - it's blank / NaN, or
+      - it's in the explicit DUMMY_FLIGHTS override set, or
+      - its numeric portion is entirely zeros, regardless of the
+        airline-code prefix (e.g. QR000, EK000, EY000, VN000, "000").
     """
     if pd.isna(flight_number):
         return True
 
     flight_number = str(flight_number).strip().upper()
-    return flight_number in DUMMY_FLIGHTS
+
+    if flight_number == "":
+        return True
+
+    if flight_number in DUMMY_FLIGHTS:
+        return True
+
+    if _ZERO_FLIGHT_RE.match(flight_number):
+        return True
+
+    return False
+
+
+def is_surface_airport(airport_code):
+    """
+    Returns True if the airport code is the surface/ground placeholder
+    (e.g. "RNK"), which marks a leg as part of a surface gap even if the
+    flight number itself doesn't match the dummy pattern.
+    """
+    if pd.isna(airport_code):
+        return False
+    return str(airport_code).strip().upper() == SURFACE_AIRPORT
+
 
 # ============================================================
 # SPLIT ONE ROW
@@ -85,7 +128,17 @@ def split_open_jaw_row(row):
     found_surface_gap = False
 
     for leg in legs:
-        if is_dummy_flight(leg["FlightNumber"]):
+        # A leg belongs to the surface gap if the flight number itself
+        # is a dummy (e.g. EK000) OR either endpoint is the surface
+        # placeholder airport (RNK), so we still catch it even if a
+        # future feed uses a real-looking flight number through RNK.
+        leg_is_surface = (
+            is_dummy_flight(leg["FlightNumber"])
+            or is_surface_airport(leg["DepAirport"])
+            or is_surface_airport(leg["ArrAirport"])
+        )
+
+        if leg_is_surface:
             found_surface_gap = True
             continue
 
