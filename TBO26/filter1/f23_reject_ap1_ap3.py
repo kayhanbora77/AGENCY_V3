@@ -2,11 +2,11 @@ import duckdb
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
 
-SOURCE_TABLE = "TBO26_SPLIT10"
-TARGET_TABLE = "TBO26_SPLIT11"
+SOURCE_TABLE = "TBO26_SPLIT14"
+TARGET_TABLE = "TBO26_SPLIT15"
 REJECT_TABLE = "TBO26_REJECT"
 
-REJECTION_REASON = "(AP1 = AP4) AND (AP5 IS NULL)"
+REJECTION_REASON = "(AP1 = AP3)"
 
 con = duckdb.connect(DB_PATH)
 
@@ -14,11 +14,11 @@ con = duckdb.connect(DB_PATH)
 # Reject condition
 #
 # Reject ONLY when:
-# Airport1 = Airport4 AND Airport5 IS NULL
+# Airport1 = Airport3 
 # ------------------------------------------------------------
 
 reject_condition = """
-    (Airport1 = Airport4) AND (Airport5 IS NULL)
+    (Airport1 = Airport3)
 """
 
 # ------------------------------------------------------------
