@@ -9,8 +9,8 @@ import pandas as pd
 # ============================================================================
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-SOURCE_TABLE = "TBO26_SPLIT11"
-TARGET_TABLE = "TBO26_SPLIT12"
+SOURCE_TABLE = "TBO26_SPLIT12"
+TARGET_TABLE = "TBO26_SPLIT13"
 
 MAX_FLIGHTS = 7
 MAX_DATES = 7
@@ -91,11 +91,11 @@ def get_flights_airports(row_list):
 
 def find_all_split_points(flights, airports):
     """
-    Rule 1 — Exactly 2 flights, Airport1 = Airport3:
-        e.g. BOM → AMS → BOM
+    Rule 1 — Exactly 3 flights, Airport1 = Airport3:
+        e.g. CDG → BLR → CDG → BLR
         Split into:
           Segment 1: FlightNumber1 | Airport1 → Airport2 
-          Segment 2: FlightNumber2 | Airport2 → Airport3          
+          Segment 2: FlightNumber2,FlightNumber3 | Airport2 → Airport3 → Airport4          
     """
     n_f = len(flights)
     n_a = len(airports)
@@ -104,13 +104,13 @@ def find_all_split_points(flights, airports):
         f"Airport= {n_a} {airports}"
     )
 
-    if n_f < 2:
+    if n_f < 3:
         return []
 
     split_points = set()
 
-    # ── Rule 1: exactly 2 flights and Airport1 = Airport3 ───────────────────
-    if n_f == 2 and n_a == 3 and airports[0] == airports[2]:
+    # ── Rule 1: exactly 3 flights and Airport1 = Airport3 ───────────────────
+    if n_f == 3 and n_a == 4 and airports[0] == airports[2]:
         split_points.add(1)
 
     return sorted(split_points)
