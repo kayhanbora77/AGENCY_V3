@@ -21,15 +21,15 @@ class Config:
     threads: int = 8
     memory_limit: str = "8GB"
     temp_dir: str = r"C:\DuckDB\temp"
-    source_table: str = "RIYA_GULF_CLEANED"
-    target_table: str = "TA_STANDARD_RIYAGULF"
+    source_table: str = "RIYA_INDIA_CLEANED"
+    target_table: str = "TA_STANDARD_RIYAINDIA"
     read_chunk: int = 200_000
     parse_workers: int = 4
-    max_legs: int = 8
+    max_legs: int = 9
 
 
 PREFIX_FLIGHTNO="FlightNumber"
-PREFIX_DEPARTUREDATE="DepartureDate"
+PREFIX_DEPARTUREDATE="FlightDate"
 PREFIX_AIRPORT="Airport"
 PREFIX_AIRLINE="AirlineCode"
 
@@ -370,8 +370,8 @@ class ChunkProcessor:
                 ).values,
                 "AirlineCode": leg_airline.fillna("").values,   # <-- per-leg airline
                 "PaxName": sub["PaxName"].fillna("").astype(str).str.strip().values,
-                "ETicketNo": None,
-                "BookingRef": sub["PNRNo"].fillna("").astype(str).str.strip().values,
+                "ETicketNo": sub["ETicketNo"].fillna("").astype(str).str.strip().values,
+                "BookingRef": sub["BookingRef"].fillna("").astype(str).str.strip().values,
                 "FileName": sub.get("_SourceFile", pd.Series([""] * len(sub), index=sub.index))
                 .fillna("")
                 .astype(str)
