@@ -4,7 +4,7 @@ from datetime import timedelta
 import logging
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-SOURCE_TABLE = "THOMASCOOK_MISSCONNECTION"
+SOURCE_TABLE = "RIYAINDIA_MISSCONNECTION"
 MIN_LAYOVER_MINUTES = 45
 
 logging.basicConfig(
