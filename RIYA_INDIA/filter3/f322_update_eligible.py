@@ -125,6 +125,7 @@ def _vectorized_eligibility(df: pd.DataFrame, ref_data: ReferenceData) -> pd.Ser
 
     airline_code_is_special = airline_code.isin(SPECIAL_CARRIERS)
     airline_code_is_special_non_eu = airline_code.isin(SPECIAL_NON_EU_CARRIERS)
+    airline_code_is_eu_carrier = airline_code.isin(ref_data.eu_carriers)   # NEW
 
     # ---- Rule conditions (journey-level) ----
     # RULE 5: FirstLegAirport is EU -> Eligible True
@@ -132,6 +133,11 @@ def _vectorized_eligibility(df: pd.DataFrame, ref_data: ReferenceData) -> pd.Ser
 
     # RULE 4: bookend Non-EU -> Non-EU -> Eligible False
     rule4_false = (~first_is_eu) & (~last_is_eu)
+
+    # RULE 3B (new): arriving into the EU on an EU/Union carrier -> Eligible True
+    # Covers e.g. IST(TR)->MAD on UX, IST(TR)->OTP on RO, which Rule 3's
+    # hardcoded SPECIAL_NON_EU_CARRIERS list never granted.
+    rule3b_true = last_is_eu & airline_code_is_eu_carrier
 
     # RULE 3: selected airline is a SPECIAL_NON_EU_CARRIER -> True
     rule3_true = airline_code_is_special_non_eu
@@ -144,12 +150,12 @@ def _vectorized_eligibility(df: pd.DataFrame, ref_data: ReferenceData) -> pd.Ser
 
     # Apply in priority order (lowest first, highest last overwrites)
     eligible = pd.Series(False, index=df.index)
-    eligible = eligible.mask(rule5_true, True)   # Rule 5
-    eligible = eligible.mask(rule4_false, False) # Rule 4
-    eligible = eligible.mask(rule3_true, True)   # Rule 3
-    eligible = eligible.mask(rule2_true, True)   # Rule 2
-    eligible = eligible.mask(rule1_false, False) # Rule 1 (highest priority)
-
+    eligible = eligible.mask(rule5_true, True)    # Rule 5
+    eligible = eligible.mask(rule4_false, False)  # Rule 4
+    eligible = eligible.mask(rule3b_true, True)   # Rule 3B (new)
+    eligible = eligible.mask(rule3_true, True)    # Rule 3
+    eligible = eligible.mask(rule2_true, True)    # Rule 2
+    eligible = eligible.mask(rule1_false, False)  # Rule 1 (highest priority)
     # RULE 6: if any leg in a journey is eligible, mark every leg eligible
     eligible = eligible.groupby(grp_uid, sort=False).transform("any")
 
