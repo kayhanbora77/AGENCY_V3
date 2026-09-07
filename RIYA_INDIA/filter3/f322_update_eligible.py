@@ -164,7 +164,7 @@ def _vectorized_eligibility(df: pd.DataFrame, ref_data: ReferenceData) -> pd.Ser
 
 def _apply_disruption_veto(df: pd.DataFrame, ref_data: ReferenceData) -> pd.Series:
     """
-    Rule 7 (new): disruption-based veto layered on top of Rules 1-6.
+    Rule 7 (revised): disruption-based veto layered on top of Rules 1-6.
 
     Only rows with a disrupted Status (cancel/delay/diversion) can trigger this
     veto. Position within the journey changes which carrier sets exempt the leg:
@@ -178,9 +178,11 @@ def _apply_disruption_veto(df: pd.DataFrame, ref_data: ReferenceData) -> pd.Seri
                               AND NOT an EU carrier -> veto
             Non-EU -> EU and carrier NOT (EU carrier or DISRUPTION_SPECIAL_CARRIER) -> veto
 
-    A veto triggered by ANY leg forces EUEligible=False for the WHOLE ConnectionID
-    (EUEligible/IsTimeLimitL1/IsTimeLimitL2 are journey-level fields, matching the
-    existing Rule 6 propagation behavior).
+    IMPORTANT: when a connection has MORE THAN ONE disrupted leg, only the
+    EARLIEST disrupted leg (lowest LegNo) determines the veto -- later
+    disruptions in the same journey are ignored, even if they individually
+    would have triggered a veto. A connection with zero disrupted legs is
+    never vetoed.
 
     Requires df["EUEligible"] to already be populated by _vectorized_eligibility.
     """
@@ -214,11 +216,27 @@ def _apply_disruption_veto(df: pd.DataFrame, ref_data: ReferenceData) -> pd.Seri
 
     row_veto = veto_bookend_domestic | veto_middle_domestic | veto_to_eu
 
-    # A veto on ANY leg forces the WHOLE connection ineligible
-    connection_veto = row_veto.groupby(df[uid_col], sort=False).transform("any")
+    # ---- NEW: only the earliest disrupted leg per connection decides the veto ----
+    # Restrict to disrupted rows, then take the lowest-LegNo row per ConnectionID.
+    # That single row's veto verdict is broadcast to the whole connection; any
+    # later disrupted legs (higher LegNo) are ignored even if row_veto is True
+    # for them.
+    disrupted_idx = df.index[disrupted]
+    if len(disrupted_idx) == 0:
+        connection_veto = pd.Series(False, index=df.index)
+    else:
+        first_disrupted_idx_by_uid = (
+            df.loc[disrupted_idx]
+            .groupby(uid_col, sort=False)["LegNo"]
+            .idxmin()
+        )
+        first_leg_veto_by_uid = pd.Series(
+            row_veto.loc[first_disrupted_idx_by_uid.values].values,
+            index=first_disrupted_idx_by_uid.index,
+        )
+        connection_veto = df[uid_col].map(first_leg_veto_by_uid).fillna(False).astype(bool)
 
     return df["EUEligible"] & (~connection_veto)
-
 
 def _enforce_connection_level_consistency(df: pd.DataFrame) -> pd.Series:
     """
