@@ -233,115 +233,68 @@ def _compute_eu_eligibility(df: pd.DataFrame, ref_data: ReferenceData) -> pd.Ser
     apply_rule6 = candidate_mask & connection_verdict.notna()
     eligible = base.mask(apply_rule6, connection_verdict.fillna(False).astype(bool))
     
-        # ---- Rule 7: Re-evaluate Rule 3 (special carriers) ----
+        # ---- Rule 7: Re-evaluate Rule 3-based eligibles against disruption context ----
+    # Only apply to connections that are currently eligible AND contain a special carrier
     has_special_carrier = is_special_non_eu.groupby(uid, sort=False).transform("any")
-    rule7_candidates = eligible.fillna(False) & has_special_carrier
+    rule7_candidates = eligible.notna() & eligible & has_special_carrier
 
     if rule7_candidates.any():
+        # Find earliest disrupted leg among these candidates
         disrupted_in_candidates = disrupted & rule7_candidates
-
-        # Pre-compute connection-level bookend traits indexed by ConnectionID
-        first_from_eu_conn = first_from_is_eu.groupby(uid, sort=False).first()
-        last_to_eu_conn = last_to_is_eu.groupby(uid, sort=False).first()
-        pure_non_eu_conn = (~first_from_eu_conn) & (~last_to_eu_conn)
-
-        # ----------------------------------------------------------
-        # Case A: There is at least one disruption in the connection
-        # ----------------------------------------------------------
         if disrupted_in_candidates.any():
+            # Get earliest disrupted leg per connection
             first_disrupted_idx_by_uid = (
-                df.loc[disrupted_in_candidates]
-                  .groupby(uid_col, sort=False)["LegNo"]
-                  .idxmin()
+                df.loc[disrupted_in_candidates].groupby(uid_col, sort=False)["LegNo"].idxmin()
             )
+            disrupted_leg_airline = df.loc[first_disrupted_idx_by_uid.values, "AirlineCode"]
+            disrupted_leg_from = df.loc[first_disrupted_idx_by_uid.values, "FromAirport"]
+            disrupted_leg_to = df.loc[first_disrupted_idx_by_uid.values, "ToAirport"]
+            disrupted_leg_no = df.loc[first_disrupted_idx_by_uid.values, "LegNo"]
+            total_legs = max_leg.loc[first_disrupted_idx_by_uid.values].values
 
-            # Remap everything to ConnectionID index to guarantee alignment
-            d_airline = df.loc[first_disrupted_idx_by_uid.values, "AirlineCode"]
-            d_airline.index = first_disrupted_idx_by_uid.index
+            # Check if disrupted leg is operated by a special carrier
+            is_disrupted_leg_special = disrupted_leg_airline.isin(SPECIAL_NON_EU_CARRIERS)
 
-            d_from = df.loc[first_disrupted_idx_by_uid.values, "FromAirport"]
-            d_from.index = first_disrupted_idx_by_uid.index
+            # If NOT special, apply Rule 6 logic to this leg
+            needs_rule6_check = ~is_disrupted_leg_special
+            if needs_rule6_check.any():
+                conn_ids_to_check = first_disrupted_idx_by_uid[needs_rule6_check].index  # ConnectionID
+                idx_to_check = first_disrupted_idx_by_uid[needs_rule6_check].values     # DataFrame index
 
-            d_to = df.loc[first_disrupted_idx_by_uid.values, "ToAirport"]
-            d_to.index = first_disrupted_idx_by_uid.index
+                from_eu = disrupted_leg_from.isin(ref_data.eu_airports)
+                to_eu = disrupted_leg_to.isin(ref_data.eu_airports)
+                carrier_ok = disrupted_leg_airline.isin(ref_data.eu_carriers) | disrupted_leg_airline.isin(DISRUPTION_SPECIAL_CARRIERS)
 
-            d_legno = df.loc[first_disrupted_idx_by_uid.values, "LegNo"]
-            d_legno.index = first_disrupted_idx_by_uid.index
+                leg_is_first = disrupted_leg_no == 1
+                leg_is_last = disrupted_leg_no == total_legs
+                leg_is_middle = (~leg_is_first) & (~leg_is_last)
 
-            total_legs = max_leg.loc[first_disrupted_idx_by_uid.values]
-            total_legs.index = first_disrupted_idx_by_uid.index
+                new_verdict = pd.Series(True, index=conn_ids_to_check, dtype=bool)  # default True, then mask False
 
-            is_disrupted_special = d_airline.isin(SPECIAL_NON_EU_CARRIERS)
+                # First leg cases
+                m = leg_is_first
+                new_verdict.loc[m & (~from_eu) & (~to_eu)] = False
+                new_verdict.loc[m & (~from_eu) & to_eu] = carrier_ok.loc[m & (~from_eu) & to_eu].values
 
-            # ---- Decision tree (if-elif chain) ----
-            # 1. If disrupted leg is special carrier -> True (and stop)
-            keep_true = is_disrupted_special.copy()
+                # Last leg cases
+                m = leg_is_last
+                # EU->EU stays True (already default)
+                new_verdict.loc[m & (~from_eu) & to_eu] = carrier_ok.loc[m & (~from_eu) & to_eu].values
 
-            # Explicitly reindex connection-level traits to the disrupted subset
-            ffeu = first_from_eu_conn.reindex(keep_true.index).fillna(False)
-            pneu = pure_non_eu_conn.reindex(keep_true.index).fillna(False)
+                # Middle leg cases
+                m = leg_is_middle
+                new_verdict.loc[m & (~from_eu) & to_eu] = carrier_ok.loc[m & (~from_eu) & to_eu].values
+                new_verdict.loc[m & (~from_eu) & (~to_eu)] = carrier_ok.loc[m & (~from_eu) & (~to_eu)].values
 
-            # 2. elif First leg departs EU -> True (and stop)
-            mask = ~keep_true
-            keep_true.loc[mask & ffeu] = True
+                # For connections that fail Rule 6 logic, set entire connection to False
+                failing_connections = new_verdict[~new_verdict].index
+                if len(failing_connections):
+                    eligible = eligible.mask(uid.isin(failing_connections), False)
 
-            # 3. elif Pure Non-EU -> Non-EU bookend -> False (and stop)
-            mask = ~keep_true
-            keep_true.loc[mask & pneu] = False
-
-            # 4. elif Non-EU -> EU bookend -> apply Rule-6 style logic
-            # Only evaluate if not resolved by 1-3
-            remaining = (~keep_true) & ~pneu
-            if remaining.any():
-                from_eu = d_from.isin(ref_data.eu_airports)
-                to_eu   = d_to.isin(ref_data.eu_airports)
-                carrier_ok = (
-                    d_airline.isin(ref_data.eu_carriers) |
-                    d_airline.isin(DISRUPTION_SPECIAL_CARRIERS)
-                )
-
-                leg_first  = d_legno == 1
-                leg_last   = d_legno == total_legs
-                leg_middle = (~leg_first) & (~leg_last)
-
-                # Initialize with False, indexed by the full keep_true index to avoid alignment errors
-                rule6_style = pd.Series(False, index=keep_true.index)
-
-                # First leg
-                m = leg_first & remaining
-                rule6_style.loc[m & (~from_eu) & to_eu] = carrier_ok.loc[m & (~from_eu) & to_eu]
-
-                # Last leg
-                m = leg_last & remaining
-                rule6_style.loc[m & from_eu & to_eu] = True
-                rule6_style.loc[m & (~from_eu) & to_eu] = carrier_ok.loc[m & (~from_eu) & to_eu]
-
-                # Middle leg
-                m = leg_middle & remaining
-                rule6_style.loc[m & from_eu] = True
-                rule6_style.loc[m & (~from_eu) & to_eu] = carrier_ok.loc[m & (~from_eu) & to_eu]
-                rule6_style.loc[m & (~from_eu) & (~to_eu)] = carrier_ok.loc[m & (~from_eu) & (~to_eu)]
-
-                keep_true = keep_true | rule6_style
-
-            # Apply the final decision to the whole connection
-            failing = keep_true.index[~keep_true]
-            if len(failing):
-                eligible = eligible.mask(uid.isin(failing), False)
-
-        # ----------------------------------------------------------
-        # Case B: Special-carrier connection with NO disruption
-        # ----------------------------------------------------------
-        else:
-            # Only force False on pure Non-EU → Non-EU bookends
-            # (Note: Rule 5 already catches this upstream, but keeping it for strict spec adherence)
-            pure_non_eu_row = (~first_from_is_eu) & (~last_to_is_eu)
-            pure_non_eu_conn_mask = pure_non_eu_row & rule7_candidates
-            if pure_non_eu_conn_mask.any():
-                eligible = eligible.mask(pure_non_eu_conn_mask, False)
-
-    # Finalise any remaining NULLs
+    # Anything still NULL after Rule 6 (not disrupted, or an uncovered
+    # disrupted From/To combination) is finalized to False.
     return eligible.fillna(False).astype(bool)
+
 
 def _enforce_connection_level_consistency(df: pd.DataFrame) -> pd.Series:
     """
