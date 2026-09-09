@@ -4,7 +4,7 @@ import duckdb
 # =====================================================
 # CONFIG
 # =====================================================
-CSV_FILE = r"C:\Users\cagri\Desktop\RiyaIndia\AllRiyaIndiaMissConnList\AllRiyaIndiaMissConnList.csv"
+CSV_FILE = r"C:\Users\cagri\Desktop\RiyaIndia\Cases\All_RiyaIndia_MissConn.csv"
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
 TABLE_NAME = "RIYAINDIA_MISSCONNECTION"
 
