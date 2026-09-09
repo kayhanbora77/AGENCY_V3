@@ -2,9 +2,9 @@ import pandas as pd
 import re
 import duckdb
 
-CSV_PATH = r"C:\Users\cagri\Desktop\RiyaIndia\RiyaIndiaOperatingFN.csv"
+CSV_PATH = r"C:\Users\cagri\Desktop\RiyaIndia\Cases\AllRiyaIndiaCancelDivertDelayList.csv"
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-TABLE_NAME = "RIYAINDIA_OPERATING_FLTNO"
+TABLE_NAME = "RIYAINDIA_CANCELDIVERTDELAY"
 
 # Load CSV into Pandas
 df = pd.read_csv(CSV_PATH)
