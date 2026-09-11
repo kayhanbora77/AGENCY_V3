@@ -4,29 +4,48 @@ import duckdb
 
 CSV_PATH = r"C:\Users\cagri\Desktop\RiyaCanada\RiyaCanadaOperatingFN.csv"
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-TABLE_NAME = "RIYACANADA_OPERATING_FLTNO"
+TABLE_NAME = "RIYACANADA_OPERATINGFN"
 
-# Load CSV into Pandas
-df = pd.read_csv(CSV_PATH)
+# Read source CSV
+df = pd.read_csv(CSV_PATH, dtype=str)
 
-# Function to fix scientific notation
+
 def fix_scientific_notation(value):
     if pd.isna(value):
         return value
+
     value_str = str(value).strip()
-    # Match patterns like 6.00E+11, 6.0E+18, etc.
-    match = re.fullmatch(r'(\d+)\.0+E\+?(\d+)', value_str, re.IGNORECASE)
+
+    match = re.fullmatch(
+        r'(\d+)\.0+E\+?(\d+)',
+        value_str,
+        re.IGNORECASE
+    )
+
     if match:
         return f"{match.group(1)}E{match.group(2)}"
+
     return value_str
 
-# Apply to FlightNumber and OperatingFlightNo
-df['FlightNumber'] = df['FlightNumber'].apply(fix_scientific_notation)
-df['OperatingFlightNo'] = df['OperatingFlightNo'].apply(fix_scientific_notation)
 
-# Save cleaned data back to CSV (optional)
-df.to_csv('cleaned_flights.csv', index=False)
+# Clean columns
+df["FlightNumber"] = df["FlightNumber"].apply(fix_scientific_notation)
+df["OperatingFlightNo"] = df["OperatingFlightNo"].apply(fix_scientific_notation)
 
-# Import cleaned data into DuckDB
-con = duckdb.connect(database=DB_PATH)
-con.execute(f"CREATE OR REPLACE TABLE {TABLE_NAME} AS SELECT * FROM read_csv('cleaned_flights.csv', header=true);")
+# Insert into DuckDB directly
+con = duckdb.connect(DB_PATH)
+
+try:
+    con.register("temp_df", df)
+
+    con.execute(f"""
+        CREATE OR REPLACE TABLE {TABLE_NAME} AS
+        SELECT *
+        FROM temp_df
+    """)
+
+    print(f"Table {TABLE_NAME} created successfully.")
+    con.unregister("temp_df")
+
+finally:
+    con.close()
