@@ -1,111 +1,109 @@
-
+import os
+import shutil
 import duckdb
 
 # =====================================================
 # CONFIG
 # =====================================================
-CSV_FILE = r"C:\Users\cagri\Desktop\RiyaIndia\Cases\All_RiyaIndia_MissConn.csv"
+
+CSV_FILE = r"C:\Users\cagri\Desktop\RiyaIndia\TA_STANDARD_RIYAINDIA_VF.csv"
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-TABLE_NAME = "RIYAINDIA_MISSCONNECTION"
+TABLE_NAME = "TA_STANDARD_RIYAINDIA_VF"
 
-con = duckdb.connect(str(DB_PATH))
+# =====================================================
+# CSV HEADER
+# =====================================================
+HEADER = (
+    "Id,ConnectionID,PaxName,AgencyRefNumber,ETicketNo,FlightNumber,"
+    "DepartureDate,FileName,BookingRef,AirlineCode,FromAirport,ToAirport,"
+    "LastLegAirport,GMTDeparture,GMTArrival,EUEligible,EUEligibleDuration,"
+    "ExtraNote,FlightFound,LegNo,IsTimeLimitL1,IsTimeLimitL2,"
+    "EUFlights_Id,Link_Id,DelayInSecond,Status,IsSingleFlight,"
+    "IsMultiSegment,OperatingFlightNo,ScheduledDeparture,ScheduledArrival,"
+    "ActualDeparture,ActualArrival,SourceData"
+)
 
+# =====================================================
+# ADD HEADER IF MISSING
+# =====================================================
+
+with open(CSV_FILE, "r", encoding="utf-8-sig", errors="ignore") as f:
+    first_line = f.readline().strip()
+
+if not first_line.startswith("Id,ConnectionID"):
+    print("Adding CSV header...")
+    temp_file = CSV_FILE + ".tmp"
+    with open(temp_file, "w", encoding="utf-8", newline="") as outfile:
+        outfile.write(HEADER + "\n")
+        with open(CSV_FILE, "r", encoding="utf-8-sig", errors="ignore") as infile:
+            shutil.copyfileobj(infile, outfile)
+    os.replace(temp_file, CSV_FILE)
+    print("Header added successfully.")
+else:
+    print("Header already exists.")
+
+con = duckdb.connect(DB_PATH)
+con.execute(f"DROP TABLE IF EXISTS {TABLE_NAME}")
+
+print("Loading CSV into DuckDB...")
+
+# Load as VARCHAR, but explicitly cast Booleans and Timestamps
 con.execute(f"""
-CREATE OR REPLACE TABLE {TABLE_NAME} AS
-SELECT
-    CAST(src.Id AS VARCHAR)                           AS Id,
-    CAST(src.ConnectionID AS VARCHAR)                 AS ConnectionID,
-    CAST(src.PaxName AS VARCHAR)                      AS PaxName,
-    CAST(src.AgencyRefNumber AS VARCHAR)              AS AgencyRefNumber,
-    CAST(src.ETicketNo AS VARCHAR)                    AS ETicketNo,
-
-    -- Clean FlightNumber: remove trailing zeros, decimal point, and + sign from exponent
-    CAST(
-        REGEXP_REPLACE(
-            REGEXP_REPLACE(
-                REGEXP_REPLACE(
-                    REGEXP_REPLACE(
-                        src.FlightNumber,
-                        '(\\.[0-9]*[1-9])0+E', '\\1E'  -- Remove trailing zeros: 1.2300E -> 1.23E
-                    ),
-                    '\\.0+E', 'E'                      -- Remove .00E: 6.00E -> 6E
-                ),
-                'E\\+0*', 'E'                          -- Remove + and leading zeros: E+032 -> E32
-            ),
-            'E\\-0*', 'E-'                             -- Handle negative: E-032 -> E-32
-        ) 
-    AS VARCHAR)                                       AS FlightNumber,
-
-    CAST(src.DepartureDate AS VARCHAR)                AS DepartureDate,
-    CAST(src.FileName AS VARCHAR)                     AS FileName,
-    CAST(src.BookingRef AS VARCHAR)                   AS BookingRef,
-    CAST(src.AirlineCode AS VARCHAR)                  AS AirlineCode,
-    CAST(src.FromAirport AS VARCHAR)                  AS FromAirport,
-    CAST(src.ToAirport AS VARCHAR)                    AS ToAirport,
-    CAST(src.LastLegAirport AS VARCHAR)               AS LastLegAirport,
-    
-    TRY_CAST(src.EUEligible AS INTEGER)               AS EUEligible,
-    TRY_CAST(src.EUEligibleDuration AS BIGINT)        AS EUEligibleDuration,
-    CAST(src.ExtraNote AS VARCHAR)                    AS ExtraNote,
-    TRY_CAST(src.FlightFound AS INTEGER)              AS FlightFound,
-    TRY_CAST(src.LegNo AS INTEGER)                    AS LegNo,
-    TRY_CAST(src.IsTimeLimitL1 AS INTEGER)            AS IsTimeLimitL1,
-    TRY_CAST(src.IsTimeLimitL2 AS INTEGER)            AS IsTimeLimitL2,
-    CAST(src.EUFlights_Id AS VARCHAR)                 AS EUFlights_Id,
-    CAST(src.Link_Id AS VARCHAR)                      AS Link_Id,
-    TRY_CAST(src.DelayInSecond AS BIGINT)             AS DelayInSecond,
-    CAST(src.Status AS VARCHAR)                       AS Status,
-    TRY_CAST(src.IsSingleFlight AS INTEGER)           AS IsSingleFlight,
-    TRY_CAST(src.IsMultiSegment AS INTEGER)           AS IsMultiSegment,
-    CAST(src.OperatingFlightNo AS VARCHAR)            AS OperatingFlightNo,
-
-    COALESCE(
-        TRY_STRPTIME(src.ScheduledDeparture, '%Y-%m-%d %H:%M:%S'),
-        TRY_STRPTIME(src.ScheduledDeparture, '%m/%d/%Y %H:%M:%S'),
-        TRY_STRPTIME(src.ScheduledDeparture, '%m/%d/%Y %H:%M'),
-        TRY_STRPTIME(src.ScheduledDeparture, '%Y-%m-%d %H:%M')
-    ) AS ScheduledDeparture,
-
-    COALESCE(
-        TRY_STRPTIME(src.ScheduledArrival, '%Y-%m-%d %H:%M:%S'),
-        TRY_STRPTIME(src.ScheduledArrival, '%m/%d/%Y %H:%M:%S'),
-        TRY_STRPTIME(src.ScheduledArrival, '%m/%d/%Y %H:%M'),
-        TRY_STRPTIME(src.ScheduledArrival, '%Y-%m-%d %H:%M')
-    ) AS ScheduledArrival,
-
-    COALESCE(
-        TRY_STRPTIME(src.ActualDeparture, '%Y-%m-%d %H:%M:%S'),
-        TRY_STRPTIME(src.ActualDeparture, '%m/%d/%Y %H:%M:%S'),
-        TRY_STRPTIME(src.ActualDeparture, '%m/%d/%Y %H:%M'),
-        TRY_STRPTIME(src.ActualDeparture, '%Y-%m-%d %H:%M')
-    ) AS ActualDeparture,
-
-    COALESCE(
-        TRY_STRPTIME(src.ActualArrival, '%Y-%m-%d %H:%M:%S'),
-        TRY_STRPTIME(src.ActualArrival, '%m/%d/%Y %H:%M:%S'),
-        TRY_STRPTIME(src.ActualArrival, '%m/%d/%Y %H:%M'),
-        TRY_STRPTIME(src.ActualArrival, '%Y-%m-%d %H:%M')
-    ) AS ActualArrival,
-
-    CAST(src.SourceData AS VARCHAR)                   AS SourceData,
-
-    -- Custom calculated place-holder columns
-    CAST(NULL AS BIGINT)  AS DelayMissConnection,
-    CAST(NULL AS BOOLEAN) AS IsMissConnection
-
-FROM read_csv_auto(
-    '{CSV_FILE}',
-    delim=',',
-    header=true,
-    ignore_errors=true,
-    nullstr=['NULL', 'null', 'N/A', ''],
-    sample_size=-1,
-    all_varchar=true
-) AS src;
+    CREATE TABLE {TABLE_NAME} AS
+    SELECT 
+        * EXCLUDE (
+            EUEligible, IsTimeLimitL1, IsTimeLimitL2, IsSingleFlight, IsMultiSegment,
+            DepartureDate, ScheduledDeparture, ScheduledArrival, ActualDeparture, ActualArrival
+        ),
+        TRY_CAST(EUEligible AS BOOLEAN) AS EUEligible,
+        TRY_CAST(IsTimeLimitL1 AS BOOLEAN) AS IsTimeLimitL1,
+        TRY_CAST(IsTimeLimitL2 AS BOOLEAN) AS IsTimeLimitL2,
+        TRY_CAST(IsSingleFlight AS BOOLEAN) AS IsSingleFlight,
+        TRY_CAST(IsMultiSegment AS BOOLEAN) AS IsMultiSegment,
+        TRY_CAST(DepartureDate AS TIMESTAMP) AS DepartureDate,
+        TRY_CAST(ScheduledDeparture AS TIMESTAMP) AS ScheduledDeparture,
+        TRY_CAST(ScheduledArrival AS TIMESTAMP) AS ScheduledArrival,
+        TRY_CAST(ActualDeparture AS TIMESTAMP) AS ActualDeparture,
+        TRY_CAST(ActualArrival AS TIMESTAMP) AS ActualArrival
+    FROM read_csv(
+        '{CSV_FILE}',
+        header=true,
+        delim=',',
+        quote='"',
+        escape='"',
+        all_varchar=true,
+        nullstr=['', 'NULL', 'null'],
+        ignore_errors=true,
+        null_padding=true,
+        strict_mode=false,
+        sample_size=-1
+    )
 """)
 
-row_count = con.execute(f"SELECT COUNT(*) FROM {TABLE_NAME}").fetchone()[0]
-print(f"Table created : {TABLE_NAME}")
-print(f"Rows loaded   : {row_count:,}")
+print("Resetting EUEligible to NULL...")
+con.execute(f"UPDATE {TABLE_NAME} SET EUEligible = NULL")
+print("EUEligible reset successfully.")
 
+row_count = con.execute(f"SELECT COUNT(*) FROM {TABLE_NAME}").fetchone()[0]
+eu_null_count = con.execute(f"""
+    SELECT COUNT(*) FROM {TABLE_NAME} WHERE EUEligible IS NULL
+""").fetchone()[0]
+
+print()
+print("=" * 60)
+print(f"Table created  : {TABLE_NAME}")
+print(f"Rows loaded    : {row_count:,}")
+print(f"EUEligible NULL: {eu_null_count:,}")
+print("=" * 60)
+
+# =====================================================
+# COLUMNS (Showing Types)
+# =====================================================
+print("\nColumns:")
+for row in con.execute(f"DESCRIBE {TABLE_NAME}").fetchall():
+    print(f"{row[0]} ({row[1]})")
+
+print("\nSample Rows:")
+print(con.execute(f"SELECT * FROM {TABLE_NAME} LIMIT 5").fetchdf())
 con.close()
+print("\nDone.")

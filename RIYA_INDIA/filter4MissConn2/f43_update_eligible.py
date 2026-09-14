@@ -7,8 +7,8 @@ from typing import FrozenSet
 logger = logging.getLogger(__name__)
 
 # Constants
-SOURCE_TABLE = "RIYAINDIA_MISSCONNECTION"
-TARGET_TABLE = "RIYAINDIA_MISSCONNECTION_RESULT"
+SOURCE_TABLE = "TA_STANDARD_RIYAINDIA_VF"
+TARGET_TABLE = "TA_STANDARD_RIYAINDIA_VF_RESULT"
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
 
@@ -126,8 +126,8 @@ def _compute_eu_eligibility(df: pd.DataFrame, ref_data: ReferenceData) -> pd.Ser
 
     Priority1 (High): FirstLeg.FromAirport = EU -> True.
 
-    Priority2: ANY leg where (that leg is Disrupted) AND (that leg's
-        AirlineCode is in SPECIAL_AIRLINES) -> True.
+    Priority2: FirstLeg is Disrupted AND FirstLeg.AirlineCode is in
+        SPECIAL_AIRLINES -> True. (Scoped to FirstLeg only -- not any leg.)
 
     Priority3: FirstLeg.FromAirport = TR AND FirstLeg is Disrupted AND
         FirstLeg.AirlineCode in SPECIAL_TR_CARRIERS (LH/XQ/QR) -> True.
@@ -275,10 +275,9 @@ def _compute_eu_eligibility(df: pd.DataFrame, ref_data: ReferenceData) -> pd.Ser
     eligible = eligible.mask(p3_cond, True)
 
     # ================= Priority2 =================
-    # Any disrupted leg flown by a Special Airline. Unified: for a single
-    # flight this collapses to "is the leg itself disrupted and Special".
-    leg_special_disrupted = is_disrupted_leg & df["AirlineCode"].isin(SPECIAL_AIRLINES)
-    p2_cond = is_candidate & leg_special_disrupted.groupby(uid, sort=False).transform("any")
+    # FirstLeg disrupted and flown by a Special Airline. Unified: for a
+    # single flight "the leg" == FirstLeg.
+    p2_cond = is_candidate & first_disrupted & first_airline.isin(SPECIAL_AIRLINES)
     eligible = eligible.mask(p2_cond, True)
 
     # ================= Priority1 (High) =================
@@ -308,14 +307,14 @@ def process_table():
     df["EUEligible"] = _compute_eu_eligibility(df, ref_data)
     df["EUEligible"] = _enforce_connection_level_consistency(df)
 
-    df.loc[~df["EUEligible"], "IsTimeLimitL1"] = 0
-    df.loc[~df["EUEligible"], "IsTimeLimitL2"] = 0
+    # FIX: Changed 0 to False because these columns are now strict BOOLEAN types
+    df.loc[~df["EUEligible"], "IsTimeLimitL1"] = False
+    df.loc[~df["EUEligible"], "IsTimeLimitL2"] = False
 
     # Source table is left untouched -- only the result table is written.
     con.execute(f"DROP TABLE IF EXISTS {TARGET_TABLE}")
     con.execute(f"CREATE TABLE {TARGET_TABLE} AS SELECT * FROM df")
     con.close()
-
 
 if __name__ == "__main__":
     process_table()

@@ -4,7 +4,7 @@ from datetime import timedelta
 import logging
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-SOURCE_TABLE = "RIYAINDIA_MISSCONNECTION"
+SOURCE_TABLE = "TA_STANDARD_RIYAINDIA_VF"
 MIN_LAYOVER_MINUTES = 45
 
 logging.basicConfig(
@@ -12,63 +12,29 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-DATETIME_COLS = [
-    "DepartureDate",
-    "FlightDate",
-    "ScheduledDeparture",
-    "ScheduledArrival",
-    "ActualDeparture",
-    "ActualArrival",
-]
-
-
-def load_missconnection_data() -> pd.DataFrame:
-    """Load data from DuckDB and parse datetime columns."""
+def load_connection_data() -> pd.DataFrame:
+    """Load multi-leg connection data and parse datetime columns."""
     with duckdb.connect(DB_PATH) as con:
-        df = con.execute(f"SELECT * FROM {SOURCE_TABLE}").df()
-
+        df = con.execute(f"""
+            SELECT Id, ConnectionID, LegNo, ActualArrival, ScheduledDeparture
+            FROM {SOURCE_TABLE}
+            WHERE IsSingleFlight = FALSE;
+        """).df()
     if df.empty:
-        logger.info("No data found in %s", SOURCE_TABLE)
+        logger.info("No multi-leg data found in %s", SOURCE_TABLE)
         return pd.DataFrame()
 
-    for col in DATETIME_COLS:
-        if col in df.columns:
-            df[col] = pd.to_datetime(df[col].replace("NULL", pd.NaT), errors="coerce")
+    logger.info("Loaded %d multi-leg rows", len(df))
+    
+    # Convert datetime columns that actually exist in our 5-column query
+    for col in ["ActualArrival", "ScheduledDeparture"]:
+        df[col] = pd.to_datetime(df[col].replace(["NULL", "null", "", "None"], pd.NaT), errors="coerce")
+
+    # Convert LegNo to numeric for correct sorting
+    if "LegNo" in df.columns:
+        df["LegNo"] = pd.to_numeric(df["LegNo"], errors="coerce")
 
     return df
-
-
-def set_missconnection(group: pd.DataFrame) -> pd.DataFrame:
-    """Process a single connection group to detect missed connections."""
-    group = group.copy().reset_index(drop=True)
-    group["DelayMissConnection"] = pd.NA
-    group["DelayMissConnectionId"] = pd.NA
-    group["IsMissConnection"] = False
-
-    for i in range(len(group) - 1):
-        row = group.iloc[i]
-        next_row = group.iloc[i + 1]
-
-        actual_arrival = row["ActualArrival"]
-        scheduled_departure = next_row["ScheduledDeparture"]
-
-        if pd.isna(actual_arrival) or pd.isna(scheduled_departure):
-            continue
-
-        # Calculate layover: Next Scheduled Departure - Current Actual Arrival
-        layover = scheduled_departure - actual_arrival
-        layover_seconds = int(layover.total_seconds())
-
-        # Store delay on the CURRENT leg (represents delay before next connection)
-        group.loc[i, "DelayMissConnection"] = layover_seconds
-        group.loc[i, "DelayMissConnectionId"] = str(row["Id"])
-
-        # RULE: <= 45 minutes is a missed connection
-        if layover <= timedelta(minutes=MIN_LAYOVER_MINUTES):
-            group.loc[i, "IsMissConnection"] = True
-
-    return group
-
 
 def update_missconnection(processed_df: pd.DataFrame) -> None:
     """Batch update using a temp table."""
@@ -85,9 +51,25 @@ def update_missconnection(processed_df: pd.DataFrame) -> None:
     logger.info("Updating %d rows in database...", len(updates))
 
     with duckdb.connect(DB_PATH) as con:
-        con.execute(
-            "CREATE OR REPLACE TEMP TABLE _miss_updates AS SELECT * FROM updates"
-        )
+        # 1. Add columns to the source table if they don't exist
+        con.execute(f"""
+            ALTER TABLE {SOURCE_TABLE} 
+            ADD COLUMN IF NOT EXISTS DelayMissConnection BIGINT;
+        """)
+        con.execute(f"""
+            ALTER TABLE {SOURCE_TABLE} 
+            ADD COLUMN IF NOT EXISTS IsMissConnection BOOLEAN;
+        """)
+        # If you also want to save the ID in the database, uncomment these lines:
+        # con.execute(f"""
+        #     ALTER TABLE {SOURCE_TABLE} 
+        #     ADD COLUMN IF NOT EXISTS DelayMissConnectionId VARCHAR;
+        # """)
+
+        # 2. Register the dataframe for DuckDB to see it
+        con.register("_miss_updates", updates)
+        
+        # 3. Execute the update
         con.execute(f"""
             UPDATE {SOURCE_TABLE} AS t
             SET 
@@ -96,38 +78,51 @@ def update_missconnection(processed_df: pd.DataFrame) -> None:
             FROM _miss_updates u
             WHERE t.Id = u.Id
         """)
-        con.execute("DROP TABLE _miss_updates")
+def process_vectorized(df: pd.DataFrame) -> pd.DataFrame:
+    # Sort is handled here, so you don't need to do it in main()
+    df = df.sort_values(["ConnectionID", "LegNo"]).reset_index(drop=True)
 
+    # Next leg's ScheduledDeparture within each connection
+    df["NextScheduledDeparture"] = (
+        df.groupby("ConnectionID")["ScheduledDeparture"].shift(-1)
+    )
+
+    # Vectorized layover (seconds)
+    mask = df["ActualArrival"].notna() & df["NextScheduledDeparture"].notna()
+    
+    df["DelayMissConnection"] = pd.NA
+    df.loc[mask, "DelayMissConnection"] = (
+        (df.loc[mask, "NextScheduledDeparture"] - df.loc[mask, "ActualArrival"])
+        .dt.total_seconds().astype("Int64")
+    )
+
+    df["DelayMissConnectionId"] = pd.NA
+    df.loc[mask, "DelayMissConnectionId"] = df.loc[mask, "Id"].astype(str)
+
+    df["IsMissConnection"] = False
+    miss_mask = mask & (
+        (df["NextScheduledDeparture"] - df["ActualArrival"])
+        <= timedelta(minutes=MIN_LAYOVER_MINUTES)
+    )
+    df.loc[miss_mask, "IsMissConnection"] = True
+
+    return df
 
 def main():
-    df = load_missconnection_data()
+    df = load_connection_data()
 
     if df.empty:
         logger.info("No data to process")
         return
 
-    # CRITICAL: Sort by ConnectionID and LegNo to ensure proper ordering
-    if "LegNo" in df.columns:
-        df = df.sort_values(["ConnectionID", "LegNo"]).reset_index(drop=True)
-    else:
-        logger.warning("LegNo column not found, sorting by ConnectionID only")
-        df = df.sort_values(["ConnectionID"]).reset_index(drop=True)
-
-    # Process each connection group separately
-    processed_groups = []
-    for conn_id, group in df.groupby("ConnectionID"):
-        processed_group = set_missconnection(group)
-        processed_groups.append(processed_group)
-
-    # Combine all processed groups
-    processed_df = pd.concat(processed_groups, ignore_index=True)
+    # process_vectorized handles the sorting automatically
+    processed_df = process_vectorized(df)
 
     missed_count = processed_df["IsMissConnection"].sum()
     logger.info("Missed connections detected: %d", missed_count)
 
     update_missconnection(processed_df)
     logger.info("Processing complete")
-
 
 if __name__ == "__main__":
     main()
