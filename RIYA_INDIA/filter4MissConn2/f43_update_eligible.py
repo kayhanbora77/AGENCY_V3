@@ -12,35 +12,32 @@ TARGET_TABLE = "RIYAINDIA_MISSCONNECTION_RESULT"
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
 
-# "Special Airlines" per the spec's "(EU Carrier or Special Airlines)" clause.
-# ASSUMPTION: same carrier set used as DISRUPTION_SPECIAL_CARRIERS in the
-# CANCELDIVERTDELAY script (the other "similar task"). Change this one line
-# if the spec actually means the LH/XQ/QR set instead.
+# "Special Airlines" carve-out used in Priority2 and in Priority5's
+# connection-level carrier_ok checks.
 SPECIAL_NON_EU_CARRIERS: FrozenSet[str] = frozenset({"BA", "TK", "PC", "JU", "FH", "VF", "VS", "XQ"})
 SPECIAL_AIRLINES: FrozenSet[str] = SPECIAL_NON_EU_CARRIERS
 
-# Statuses that trigger a leg to be considered for eligibility purposes.
+# Priority3's narrower "Turkey departure" carve-out. Distinct from
+# SPECIAL_AIRLINES above -- only these three carriers qualify for Priority3.
+SPECIAL_TR_CARRIERS: FrozenSet[str] = frozenset({"LH", "XQ", "QR"})
+
+# Leg-level statuses that (together with IsMissConnection) make up the
+# "DisruptedLeg" predicate.
 CANCEL_DIVERT_STATUSES: FrozenSet[str] = frozenset({"CANCEL", "DIVERSION"})
 DELAY_STATUS = "DELAY"
-# ASSUMPTION: the connection-level *trigger* (step 2's outer "if") only
-# counts a Delay when it's on the LAST leg, per the spec: "any leg status
-# in (cancel,diver) or last leg status=Delay or any leg IsMissConnection".
-# But the *lookup* for "the first disrupted leg" (used once a connection has
-# already qualified) counts Delay on ANY leg, per: "find first leg which
-# one status in (cancel,diver,delay) or IsMissConnection." These two are
-# taken literally from the spec even though they're inconsistent with each
-# other -- flagging in case that was a spec typo rather than intentional.
-LOOKUP_DISRUPTED_STATUSES: FrozenSet[str] = frozenset({"CANCEL", "DIVERSION", "DELAY"})
 
 
 class ReferenceData:
-    __slots__ = ("eu_airports", "eu_carriers")
+    __slots__ = ("eu_airports", "eu_carriers", "tr_airports")
 
     def __init__(self, con: duckdb.DuckDBPyConnection):
         self.eu_airports: frozenset = self._load_airports(con)
         self.eu_carriers: frozenset = self._load_carriers(con)
+        self.tr_airports: frozenset = self._load_country_airports(con, "TR")
         logger.info(
-            f"Loaded {len(self.eu_airports):,} EU airports, {len(self.eu_carriers):,} EU carriers"
+            f"Loaded {len(self.eu_airports):,} EU airports, "
+            f"{len(self.eu_carriers):,} EU carriers, "
+            f"{len(self.tr_airports):,} TR airports"
         )
 
     @staticmethod
@@ -61,16 +58,26 @@ class ReferenceData:
         """).fetchall()
         return frozenset(r[0].strip().upper() for r in rows if r and r[0])
 
+    @staticmethod
+    def _load_country_airports(con, iso2: str) -> frozenset:
+        """Airports whose country is `iso2` -- used for Priority3's
+        'FromAirport=TR' departure check."""
+        rows = con.execute(
+            "SELECT CodeIataAirport FROM AIRPORTS WHERE CodeIso2Country = ?",
+            [iso2],
+        ).fetchall()
+        return frozenset(r[0].strip().upper() for r in rows if r and r[0])
+
 
 def _fetch_candidate_rows(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     """
-    Step 1 of the spec: pull every row belonging to a ConnectionID that has
-    AT LEAST ONE leg flagged IsMissConnection, or with Status in
+    Coarse SQL-level pre-filter: pull every row belonging to a ConnectionID
+    that has AT LEAST ONE leg flagged IsMissConnection, or with Status in
     (cancel, diversion, Delay) -- anywhere in the connection. This is a
-    superset of the true "candidate" definition used in eligibility (which
-    restricts Delay to the last leg); the extra rows it brings in are
-    resolved to EUEligible=False downstream since they don't meet the
-    stricter trigger.
+    superset of the true "Data" definition used for eligibility (which only
+    counts Delay when it's on the LastLeg); the extra rows it brings in
+    resolve to EUEligible=False downstream since they don't meet the
+    stricter DisruptedLeg definition.
     """
     return con.execute(f"""
         SELECT * FROM {SOURCE_TABLE}
@@ -85,48 +92,73 @@ def _fetch_candidate_rows(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     """).fetchdf()
 
 
+def _broadcast(uid: pd.Series, source: pd.Series, idx_by_uid: pd.Series) -> pd.Series:
+    """Pick `source`'s value at each connection's selected row (idx_by_uid,
+    indexed by ConnectionID) and broadcast it to every row sharing that
+    ConnectionID."""
+    picked = source.loc[idx_by_uid.values]
+    picked.index = idx_by_uid.index
+    return uid.map(picked)
+
+
 def _compute_eu_eligibility(df: pd.DataFrame, ref_data: ReferenceData) -> pd.Series:
     """
-    EU261 eligibility for RIYAINDIA_MISSCONNECTION, per spec step 2.
+    EU261 eligibility per the Priority1(High)..Priority5(Low) rule set.
+    Priorities are evaluated in order; the highest-priority rule whose
+    condition holds for a connection (or single-flight row) decides
+    EUEligible. Anything not resolved True/False by Priority1-5 finalizes
+    to False (rows outside the "Data" filter included).
 
-    Only rows in a "candidate" connection get a real verdict; everything
-    else finalizes to False. A connection is a candidate when:
-        any leg Status in (CANCEL, DIVERSION)
-        OR last-leg Status == DELAY
-        OR any leg IsMissConnection == True
+    DisruptedLeg (per leg): Status in (CANCEL, DIVERSION), OR
+    (Status == DELAY AND that leg is the connection's LastLeg), OR
+    IsMissConnection == True. This single definition is used everywhere
+    below -- candidacy, Priority2's any-leg lookup, and Priority5's
+    earliest-disrupted-leg lookup -- unlike the previous version of this
+    script, which used two different Delay rules for triggering vs. lookup.
 
-    Within a candidate connection:
+    Data / candidacy:
+        IsSingleFlight=1 -> that (only) leg is Disrupted
+        IsSingleFlight=0 -> ANY leg in the connection is Disrupted
+    A ConnectionID group of size 1 makes "any leg" and "the leg itself"
+    identical, so most rules below are computed with one expression that
+    covers both IsSingleFlight cases; FirstLeg == LastLeg == the only leg
+    for a single flight.
 
-        Rule A - FirstLeg (LegNo=1) departs an EU airport -> True,
-                 broadcast to every leg in the connection.
+    Priority1 (High): FirstLeg.FromAirport = EU -> True.
 
-        Rule B - FirstLeg departs a Non-EU airport -> find the EARLIEST
-                 disrupted leg (Status in CANCEL/DIVERSION/DELAY, or
-                 IsMissConnection True -- any leg, any position) and apply,
-                 based on that leg's position:
+    Priority2: ANY leg where (that leg is Disrupted) AND (that leg's
+        AirlineCode is in SPECIAL_AIRLINES) -> True.
 
-            Disrupted FirstLeg (LegNo=1) [guaranteed From=NonEU here]:
-                ToAirport=NonEU                        => False
-                ToAirport=EU, carrier EU/Special       => True   else False
+    Priority3: FirstLeg.FromAirport = TR AND FirstLeg is Disrupted AND
+        FirstLeg.AirlineCode in SPECIAL_TR_CARRIERS (LH/XQ/QR) -> True.
 
-            Disrupted LastLeg (LegNo=Max):
-                FromAirport=EU                         => True
+    Priority4: FirstLeg.FromAirport = NonEU AND LastLeg.ToAirport = NonEU
+        -> False (whole itinerary outside the EU).
+
+    Priority5 (Low): only reached once P1-P4 didn't fire, which means
+        FirstLeg.FromAirport = NonEU and LastLeg.ToAirport = EU.
+        - IsSingleFlight=1: EUEligible = True iff AirlineCode is an EU
+          carrier (NOTE: per spec this does NOT include SPECIAL_AIRLINES,
+          unlike every other carrier_ok check here -- flagging in case
+          that asymmetry is a spec typo).
+        - IsSingleFlight=0: take the EARLIEST Disrupted leg and branch on
+          its position (first/last/middle) and its own From/To EU status:
+            DisruptedLegNo == 1 (guaranteed From=NonEU here):
+                ToAirport=NonEU, carrier Special           -> True, else False
+                ToAirport=EU, carrier EU or Special        -> True, else False
+            DisruptedLegNo == LastLeg:
+                FromAirport=EU AND ToAirport=EU            -> True
+                    (NOTE: spec requires BOTH ends in EU here, not just
+                    FromEU as in the previous version -- flagging in case
+                    dropping the ToEU requirement was intended)
                 FromAirport=NonEU, ToAirport=EU,
-                    carrier EU/Special                 => True   else False
-                (FromAirport=NonEU, ToAirport=NonEU -> uncovered, stays NULL
-                 -> finalizes False)
-
-            Disrupted middle leg (1 < LegNo < Max):
-                FromAirport=EU                         => True
+                    carrier EU or Special                  -> True, else False
+            1 < DisruptedLegNo < LastLeg:
+                FromAirport=EU                             -> True
                 FromAirport=NonEU, ToAirport=EU,
-                    carrier EU/Special                 => True   else False
+                    carrier EU or Special                  -> True, else False
                 FromAirport=NonEU, ToAirport=NonEU,
-                    carrier EU/Special                 => True   else False
-
-        If a candidate connection has no leg matching the disrupted-leg
-        lookup (e.g. it only qualified via a non-last-leg Delay under the
-        stricter definition below) or the earliest disrupted leg's From/To
-        combination isn't covered above, it stays NULL and finalizes False.
+                    carrier EU or Special                  -> True, else False
     """
     if df.empty:
         return pd.Series(dtype=bool)
@@ -136,34 +168,52 @@ def _compute_eu_eligibility(df: pd.DataFrame, ref_data: ReferenceData) -> pd.Ser
     grp = df.groupby(uid_col, sort=False)
 
     max_leg = grp["LegNo"].transform("max")
-    is_first_row = df["LegNo"] == 1
     is_last_row = df["LegNo"] == max_leg
 
     status_upper = df["Status"].astype(str).str.upper().str.strip()
     is_cancel_or_divert = status_upper.isin(CANCEL_DIVERT_STATUSES)
-    is_delay = status_upper.eq(DELAY_STATUS)
+    is_delay_last = status_upper.eq(DELAY_STATUS) & is_last_row
     is_miss = df["IsMissConnection"].fillna(False).astype(bool)
 
-    # ---- Connection-level trigger ----
-    trigger_any_leg = (is_cancel_or_divert | is_miss).groupby(uid, sort=False).transform("any")
-    trigger_last_delay = (is_delay & is_last_row).groupby(uid, sort=False).transform("any")
-    is_candidate_conn = trigger_any_leg | trigger_last_delay
+    is_disrupted_leg = is_cancel_or_divert | is_delay_last | is_miss
 
-    # ---- FirstLeg FromAirport, broadcast to every row in the connection ----
+    # ---- Data / candidacy ----
+    is_candidate = is_disrupted_leg.groupby(uid, sort=False).transform("any")
+
+    if "IsSingleFlight" in df.columns:
+        is_single = df["IsSingleFlight"].fillna(0).astype(int).astype(bool)
+    else:
+        # ASSUMPTION: no IsSingleFlight column on the source table -- derive
+        # it from leg count (a "connection" of exactly one leg is a single
+        # flight). Change this if IsSingleFlight is actually a real column.
+        is_single = max_leg.eq(1)
+
+    # ---- FirstLeg / LastLeg attributes, broadcast to every row ----
     first_idx = grp["LegNo"].idxmin()
-    first_from_by_uid = df.loc[first_idx, "FromAirport"]
-    first_from_by_uid.index = df.loc[first_idx, uid_col].values
-    first_from = uid.map(first_from_by_uid)
+    last_idx = grp["LegNo"].idxmax()
+
+    first_from = _broadcast(uid, df["FromAirport"], first_idx)
+    first_airline = _broadcast(uid, df["AirlineCode"], first_idx)
+    first_disrupted = _broadcast(uid, is_disrupted_leg, first_idx)
+    last_to = _broadcast(uid, df["ToAirport"], last_idx)
+
     first_from_is_eu = first_from.isin(ref_data.eu_airports)
+    first_from_is_tr = first_from.isin(ref_data.tr_airports)
+    last_to_is_eu = last_to.isin(ref_data.eu_airports)
 
     eligible = pd.Series(pd.NA, index=df.index, dtype="boolean")
 
-    # Rule A
-    eligible = eligible.mask(is_candidate_conn & first_from_is_eu, True)
+    # ================= Priority5 (Low) -- computed first so every ================
+    # ================= higher priority below can overwrite it     ================
 
-    # Rule B: candidate connections whose FirstLeg is Non-EU and not yet decided
-    needs_lookup = is_candidate_conn & (~first_from_is_eu) & eligible.isna()
-    is_disrupted_leg = is_cancel_or_divert | is_delay | is_miss
+    # Single flight: only remaining scenario after P1-P4 is
+    # FromAirport=NonEU, ToAirport=EU (P4 already vetoes NonEU->NonEU).
+    single_carrier_ok = df["AirlineCode"].isin(ref_data.eu_carriers)
+    p5_single = is_single & is_candidate & (~first_from_is_eu)
+    eligible = eligible.mask(p5_single, single_carrier_ok)
+
+    # Connections: earliest Disrupted leg, branch on position + From/To EU.
+    needs_lookup = (~is_single) & is_candidate & eligible.isna()
     disrupted_idx = df.index[is_disrupted_leg & needs_lookup]
 
     if len(disrupted_idx):
@@ -185,6 +235,7 @@ def _compute_eu_eligibility(df: pd.DataFrame, ref_data: ReferenceData) -> pd.Ser
         from_eu = d_from.isin(ref_data.eu_airports)
         to_eu = d_to.isin(ref_data.eu_airports)
         carrier_ok = d_airline.isin(ref_data.eu_carriers) | d_airline.isin(SPECIAL_AIRLINES)
+        special_ok = d_airline.isin(SPECIAL_AIRLINES)
 
         leg_first = d_legno == 1
         leg_last = d_legno == d_maxleg
@@ -192,17 +243,17 @@ def _compute_eu_eligibility(df: pd.DataFrame, ref_data: ReferenceData) -> pd.Ser
 
         verdict = pd.Series(pd.NA, index=d_legno.index, dtype="boolean")
 
-        # Disrupted first leg (From is guaranteed Non-EU in this branch)
+        # DisruptedLegNo == 1 (From is guaranteed NonEU here)
         m = leg_first
-        verdict = verdict.mask(m & (~to_eu), False)
+        verdict = verdict.mask(m & (~to_eu), special_ok)
         verdict = verdict.mask(m & to_eu, carrier_ok)
 
-        # Disrupted last leg
+        # DisruptedLegNo == LastLeg
         m = leg_last
-        verdict = verdict.mask(m & from_eu, True)
+        verdict = verdict.mask(m & from_eu & to_eu, True)
         verdict = verdict.mask(m & (~from_eu) & to_eu, carrier_ok)
 
-        # Disrupted middle leg
+        # 1 < DisruptedLegNo < LastLeg
         m = leg_middle
         verdict = verdict.mask(m & from_eu, True)
         verdict = verdict.mask(m & (~from_eu) & to_eu, carrier_ok)
@@ -211,14 +262,39 @@ def _compute_eu_eligibility(df: pd.DataFrame, ref_data: ReferenceData) -> pd.Ser
         connection_verdict = uid.map(verdict)
         eligible = eligible.mask(needs_lookup & connection_verdict.notna(), connection_verdict)
 
+    # ================= Priority4 =================
+    # Whole itinerary outside the EU. Unified: for a single flight,
+    # FirstLeg == LastLeg == the only leg.
+    p4_cond = is_candidate & (~first_from_is_eu) & (~last_to_is_eu)
+    eligible = eligible.mask(p4_cond, False)
+
+    # ================= Priority3 =================
+    # Turkey-departure LH/XQ/QR override. Unified: for a single flight
+    # "the leg" == FirstLeg.
+    p3_cond = is_candidate & first_from_is_tr & first_disrupted & first_airline.isin(SPECIAL_TR_CARRIERS)
+    eligible = eligible.mask(p3_cond, True)
+
+    # ================= Priority2 =================
+    # Any disrupted leg flown by a Special Airline. Unified: for a single
+    # flight this collapses to "is the leg itself disrupted and Special".
+    leg_special_disrupted = is_disrupted_leg & df["AirlineCode"].isin(SPECIAL_AIRLINES)
+    p2_cond = is_candidate & leg_special_disrupted.groupby(uid, sort=False).transform("any")
+    eligible = eligible.mask(p2_cond, True)
+
+    # ================= Priority1 (High) =================
+    # FirstLeg departs EU. Unified across single/connection.
+    p1_cond = is_candidate & first_from_is_eu
+    eligible = eligible.mask(p1_cond, True)
+
     return eligible.fillna(False).astype(bool)
 
 
 def _enforce_connection_level_consistency(df: pd.DataFrame) -> pd.Series:
     """
     Guarantees EUEligible is identical across every row sharing the same
-    ConnectionID. No-op given the broadcast logic above, kept as a safety
-    net the same way the CANCELDIVERTDELAY script does.
+    ConnectionID. No-op given the broadcast/group logic above (every rule
+    resolves to the same value for every row in a connection); kept as a
+    safety net the same way the CANCELDIVERTDELAY script does.
     """
     return df.groupby("ConnectionID", sort=False)["EUEligible"].transform("any").astype(bool)
 
