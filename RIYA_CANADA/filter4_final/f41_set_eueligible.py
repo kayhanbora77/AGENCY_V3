@@ -7,8 +7,8 @@ from typing import FrozenSet
 logger = logging.getLogger(__name__)
 
 # Constants
-SOURCE_TABLE = "TA_STANDARD_RIYAINDIA_VF"
-TARGET_TABLE = "TA_STANDARD_RIYAINDIA_VF_RESULT"
+SOURCE_TABLE = "TA_STANDARD_RIYACANADA_VF"
+TARGET_TABLE = "TA_STANDARD_RIYACANADA_VF_RESULT"
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
 
