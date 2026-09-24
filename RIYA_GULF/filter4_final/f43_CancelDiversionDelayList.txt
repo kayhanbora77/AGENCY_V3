@@ -1,0 +1,58 @@
+--RiyaGulf Cancel,Diversion,Delay List(After MissConnectionList_Checked execute this query)
+WITH Src AS (
+    SELECT *
+    FROM TA_STANDARD_RIYAGULF_VF_RESULT AS vf_result
+    WHERE vf_result.EUEligible IS TRUE AND
+    	vf_result.Status IN ('cancel','diversion','Delay') AND
+      NOT EXISTS (
+            SELECT 1
+            FROM RIYAGULF_MISSCONNECTION_CHECKED AS mc_checked
+            WHERE mc_checked.Id = vf_result.Id
+      )
+)
+SELECT *
+FROM TA_STANDARD_RIYAGULF_VF_RESULT
+WHERE ConnectionID IN (
+    SELECT DISTINCT ConnectionID
+    FROM Src
+)
+ORDER BY ConnectionID, LegNo;
+
+---------------------------------------------------------
+--Create CSV FILE
+COPY (
+    WITH Src AS (
+        SELECT *
+        FROM TA_STANDARD_RIYAGULF_VF_RESULT AS vf_result
+        WHERE vf_result.EUEligible is TRUE AND
+            vf_result.Status IN ('cancel','diversion','Delay') AND
+          NOT EXISTS (
+                SELECT 1
+                FROM RIYAGULF_MISSCONNECTION_CHECKED AS mc_checked
+                WHERE mc_checked.Id = vf_result.Id
+          )
+    )
+    SELECT 
+        Id, ConnectionID, PaxName, AgencyRefNumber, CAST(ETicketNo AS VARCHAR) AS ETicketNo, 
+        FlightNumber, DepartureDate, FileName, BookingRef, AirlineCode, FromAirport, ToAirport, 
+        LastLegAirport, GMTDeparture, GMTArrival, EUEligibleDuration, ExtraNote, FlightFound, LegNo, 
+        EUFlights_Id, Link_Id, DelayInSecond, Status, OperatingFlightNo, SourceData,
+        
+        -- Convert DuckDB booleans to 1/0 for SQL Server BIT columns
+        CASE WHEN EUEligible THEN 1 ELSE 0 END AS EUEligible,
+        CASE WHEN IsTimeLimitL1 THEN 1 ELSE 0 END AS IsTimeLimitL1,
+        CASE WHEN IsTimeLimitL2 THEN 1 ELSE 0 END AS IsTimeLimitL2,
+        CASE WHEN IsSingleFlight THEN 1 ELSE 0 END AS IsSingleFlight,
+        CASE WHEN IsMultiSegment THEN 1 ELSE 0 END AS IsMultiSegment,
+        
+        ScheduledDeparture, ScheduledArrival, ActualDeparture, ActualArrival,
+        DelayMissConnection,
+        CASE WHEN IsMissConnection THEN 1 ELSE 0 END AS IsMissConnection
+        
+    FROM TA_STANDARD_RIYAGULF_VF_RESULT
+    WHERE ConnectionID IN (
+        SELECT DISTINCT ConnectionID
+        FROM Src
+    )
+    ORDER BY ConnectionID, LegNo
+) TO 'C:\Users\cagri\Desktop\RiyaGulf\Cases\Checked\RiyaGulf_CancelDiversionDelay_Checked.csv' (HEADER, DELIMITER ',');

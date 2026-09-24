@@ -1,0 +1,6 @@
+--Candidate RiyaGulf MissConnList
+SELECT * FROM TA_STANDARD_RIYAGULF_VF_RESULT 
+WHERE ConnectionID IN(
+	SELECT ConnectionID FROM TA_STANDARD_RIYAGULF_VF_RESULT
+	WHERE EUEligible IS TRUE AND IsMissConnection IS TRUE)
+	ORDER BY ConnectionID,LegNo
