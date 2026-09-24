@@ -1,3 +1,5 @@
+import os
+import shutil
 import duckdb
 
 # =====================================================
@@ -7,100 +9,125 @@ CSV_FILE = r"C:\Users\cagri\Desktop\RiyaCanada\TA_STANDARD_RIYACANADA_VF.csv"
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
 TABLE_NAME = "TA_STANDARD_RIYACANADA_VF"
 
-con = duckdb.connect(str(DB_PATH))
+# =====================================================
+# CSV HEADER
+# =====================================================
+HEADER = (
+    "Id,ConnectionID,PaxName,AgencyRefNumber,ETicketNo,FlightNumber,"
+    "DepartureDate,FileName,BookingRef,AirlineCode,FromAirport,ToAirport,"
+    "LastLegAirport,GMTDeparture,GMTArrival,EUEligible,EUEligibleDuration,"
+    "ExtraNote,FlightFound,LegNo,IsTimeLimitL1,IsTimeLimitL2,"
+    "EUFlights_Id,Link_Id,DelayInSecond,Status,IsSingleFlight,"
+    "IsMultiSegment,OperatingFlightNo,ScheduledDeparture,ScheduledArrival,"
+    "ActualDeparture,ActualArrival,SourceData"
+)
 
-con.execute(f"""
-CREATE OR REPLACE TABLE {TABLE_NAME} AS
-SELECT
-    CAST(src.Id AS VARCHAR)                                 AS Id,
-    CAST(src.ConnectionID AS VARCHAR)                       AS ConnectionID,
-    CAST(src.PaxName AS VARCHAR)                            AS PaxName,
-    CAST(src.AgencyRefNumber AS VARCHAR)                    AS AgencyRefNumber,
-    CAST(src.ETicketNo AS VARCHAR)                          AS ETicketNo,
+# =====================================================
+# ADD HEADER IF MISSING
+# =====================================================
 
-    -- Safe cleaning for scientific notation strings without triggering infinity float overflows
+with open(CSV_FILE, "r", encoding="utf-8-sig", errors="ignore") as f:
+    first_line = f.readline().strip()
+
+if not first_line.startswith("Id,ConnectionID"):
+    print("Adding CSV header...")
+    temp_file = CSV_FILE + ".tmp"
+    with open(temp_file, "w", encoding="utf-8", newline="") as outfile:
+        outfile.write(HEADER + "\n")
+        with open(CSV_FILE, "r", encoding="utf-8-sig", errors="ignore") as infile:
+            shutil.copyfileobj(infile, outfile)
+    os.replace(temp_file, CSV_FILE)
+    print("Header added successfully.")
+else:
+    print("Header already exists.")
+
+con = duckdb.connect(DB_PATH)
+con.execute(f"DROP TABLE IF EXISTS {TABLE_NAME}")
+
+print("Loading CSV into DuckDB...")
+
+def ts_expr(col):
+    """Parse M/D/YYYY H:mm, M/D/YYYY H:mm:ss, M/D/YYYY, or ISO into TIMESTAMP."""
+    c = f"TRIM({col})"
+    return f"""COALESCE(
+            TRY_STRPTIME({c}, '%m/%d/%Y %H:%M'),
+            TRY_STRPTIME({c}, '%m/%d/%Y %H:%M:%S'),
+            TRY_STRPTIME({c}, '%m/%d/%Y'),
+            TRY_CAST({c} AS TIMESTAMP)
+        )"""
+
+# SQL macro expression equivalent to fix_scientific_notation logic:
+# Matches patterns like 6.00E+11, 6.0E+18 and simplifies them to 6E11, 6E18
+flight_clean_expr = """
     CASE 
-        WHEN TRY_CAST(src.FlightNumber AS DOUBLE) IS NOT NULL 
-             AND regexp_matches(src.FlightNumber, '[eE]')
-        THEN CAST(TRY_CAST(src.FlightNumber AS DECIMAL(18, 0)) AS VARCHAR)
-        ELSE CAST(src.FlightNumber AS VARCHAR)
-    END                                                     AS FlightNumber,
+        WHEN FlightNumber IS NULL THEN NULL
+        ELSE REGEXP_REPLACE(TRIM(CAST(FlightNumber AS VARCHAR)), '(?i)^(\\d+)\\.0+E\\+?(\\d+)$', '\\1E\\2')
+    END
+"""
 
-    COALESCE(
-        TRY_STRPTIME(src.DepartureDate, '%Y-%m-%d %H:%M:%S'),
-        TRY_STRPTIME(src.DepartureDate, '%m/%d/%Y %H:%M:%S'),
-        TRY_STRPTIME(src.DepartureDate, '%Y-%m-%d'),
-        TRY_STRPTIME(src.DepartureDate, '%m/%d/%Y')
-    )                                                       AS DepartureDate,
+op_flight_clean_expr = """
+    CASE 
+        WHEN OperatingFlightNo IS NULL THEN NULL
+        ELSE REGEXP_REPLACE(TRIM(CAST(OperatingFlightNo AS VARCHAR)), '(?i)^(\\d+)\\.0+E\\+?(\\d+)$', '\\1E\\2')
+    END
+"""
 
-    CAST(src.FileName AS VARCHAR)                           AS FileName,
-    CAST(src.BookingRef AS VARCHAR)                         AS BookingRef,
-    CAST(src.AirlineCode AS VARCHAR)                        AS AirlineCode,
-    CAST(src.FromAirport AS VARCHAR)                        AS FromAirport,
-    CAST(src.ToAirport AS VARCHAR)                          AS ToAirport,
-    CAST(src.LastLegAirport AS VARCHAR)                     AS LastLegAirport,
-    
-    TRY_CAST(src.GMTDeparture AS DECIMAL(4,1))              AS GMTDeparture,
-    TRY_CAST(src.GMTArrival AS DECIMAL(4,1))                AS GMTArrival,
-
-    TRY_CAST(src.EUEligible AS BOOLEAN)                     AS EUEligible,
-    TRY_CAST(src.EUEligibleDuration AS INTEGER)             AS EUEligibleDuration,
-    CAST(src.ExtraNote AS VARCHAR)                          AS ExtraNote,
-    TRY_CAST(src.FlightFound AS BOOLEAN)                    AS FlightFound,
-    TRY_CAST(src.LegNo AS INTEGER)                          AS LegNo,
-    TRY_CAST(src.IsTimeLimitL1 AS BOOLEAN)                  AS IsTimeLimitL1,
-    TRY_CAST(src.IsTimeLimitL2 AS BOOLEAN)                  AS IsTimeLimitL2,
-    CAST(src.EUFlights_Id AS VARCHAR)                       AS EUFlights_Id,
-    CAST(src.Link_Id AS VARCHAR)                            AS Link_Id,
-    TRY_CAST(src.DelayInSecond AS INTEGER)                  AS DelayInSecond,
-    CAST(src.Status AS VARCHAR)                             AS Status,
-    TRY_CAST(src.IsSingleFlight AS BOOLEAN)                 AS IsSingleFlight,
-    TRY_CAST(src.IsMultiSegment AS BOOLEAN)                 AS IsMultiSegment,
-    CAST(src.OperatingFlightNo AS VARCHAR)                  AS OperatingFlightNo,
-
-    COALESCE(
-        TRY_STRPTIME(src.ScheduledDeparture, '%Y-%m-%d %H:%M:%S'),
-        TRY_STRPTIME(src.ScheduledDeparture, '%m/%d/%Y %H:%M:%S'),
-        TRY_STRPTIME(src.ScheduledDeparture, '%m/%d/%Y %H:%M'),
-        TRY_STRPTIME(src.ScheduledDeparture, '%Y-%m-%d %H:%M')
-    )                                                       AS ScheduledDeparture,
-
-    COALESCE(
-        TRY_STRPTIME(src.ScheduledArrival, '%Y-%m-%d %H:%M:%S'),
-        TRY_STRPTIME(src.ScheduledArrival, '%m/%d/%Y %H:%M:%S'),
-        TRY_STRPTIME(src.ScheduledArrival, '%m/%d/%Y %H:%M'),
-        TRY_STRPTIME(src.ScheduledArrival, '%Y-%m-%d %H:%M')
-    )                                                       AS ScheduledArrival,
-
-    COALESCE(
-        TRY_STRPTIME(src.ActualDeparture, '%Y-%m-%d %H:%M:%S'),
-        TRY_STRPTIME(src.ActualDeparture, '%m/%d/%Y %H:%M:%S'),
-        TRY_STRPTIME(src.ActualDeparture, '%m/%d/%Y %H:%M'),
-        TRY_STRPTIME(src.ActualDeparture, '%Y-%m-%d %H:%M')
-    )                                                       AS ActualDeparture,
-
-    COALESCE(
-        TRY_STRPTIME(src.ActualArrival, '%Y-%m-%d %H:%M:%S'),
-        TRY_STRPTIME(src.ActualArrival, '%m/%d/%Y %H:%M:%S'),
-        TRY_STRPTIME(src.ActualArrival, '%m/%d/%Y %H:%M'),
-        TRY_STRPTIME(src.ActualArrival, '%Y-%m-%d %H:%M')
-    )                                                       AS ActualArrival,
-
-    CAST(src.SourceData AS VARCHAR)                         AS SourceData,
-
-    -- Custom calculated place-holder columns
-    CAST(NULL AS BIGINT)                                    AS DelayMissConnection,
-    CAST(NULL AS BOOLEAN)                                   AS IsMissConnection
-
-FROM read_csv_auto(
-    '{CSV_FILE}',
-    delim=',',
-    header=true,
-    ignore_errors=true,
-    nullstr=['NULL', 'null', 'N/A', ''],
-    sample_size=-1,
-    all_varchar=true
-) AS src;
+# Explicitly cast columns while preserving exact header position
+con.execute(f"""
+    CREATE TABLE {TABLE_NAME} AS
+    SELECT 
+        CAST(Id AS VARCHAR)                                     AS Id,
+        CAST(ConnectionID AS VARCHAR)                           AS ConnectionID,
+        CAST(PaxName AS VARCHAR)                                AS PaxName,
+        CAST(AgencyRefNumber AS VARCHAR)                        AS AgencyRefNumber,
+        CAST(ETicketNo AS VARCHAR)                              AS ETicketNo,
+        
+        -- Clean FlightNumber
+        {flight_clean_expr}                                     AS FlightNumber,
+        {ts_expr('DepartureDate')}                              AS DepartureDate,
+        CAST(FileName AS VARCHAR)                               AS FileName,
+        CAST(BookingRef AS VARCHAR)                             AS BookingRef,
+        CAST(AirlineCode AS VARCHAR)                            AS AirlineCode,
+        CAST(FromAirport AS VARCHAR)                            AS FromAirport,
+        CAST(ToAirport AS VARCHAR)                              AS ToAirport,
+        CAST(LastLegAirport AS VARCHAR)                         AS LastLegAirport,
+        TRY_CAST(GMTDeparture AS DECIMAL(4,1))                  AS GMTDeparture,
+        TRY_CAST(GMTArrival AS DECIMAL(4,1))                    AS GMTArrival,
+        TRY_CAST(EUEligible AS BOOLEAN)                         AS EUEligible,
+        TRY_CAST(EUEligibleDuration AS INTEGER)                 AS EUEligibleDuration,
+        CAST(ExtraNote AS VARCHAR)                              AS ExtraNote,
+        TRY_CAST(FlightFound AS BOOLEAN)                        AS FlightFound,
+        TRY_CAST(LegNo AS INTEGER)                              AS LegNo,
+        TRY_CAST(IsTimeLimitL1 AS BOOLEAN)                      AS IsTimeLimitL1,
+        TRY_CAST(IsTimeLimitL2 AS BOOLEAN)                      AS IsTimeLimitL2,
+        CAST(EUFlights_Id AS VARCHAR)                           AS EUFlights_Id,
+        CAST(Link_Id AS VARCHAR)                                AS Link_Id,
+        TRY_CAST(DelayInSecond AS INTEGER)                      AS DelayInSecond,
+        CAST(Status AS VARCHAR)                                 AS Status,
+        TRY_CAST(IsSingleFlight AS BOOLEAN)                     AS IsSingleFlight,
+        TRY_CAST(IsMultiSegment AS BOOLEAN)                     AS IsMultiSegment,
+        
+        -- Clean OperatingFlightNo
+        {op_flight_clean_expr}                                  AS OperatingFlightNo,
+        
+        {ts_expr('ScheduledDeparture')}                         AS ScheduledDeparture,
+        {ts_expr('ScheduledArrival')}                           AS ScheduledArrival,
+        {ts_expr('ActualDeparture')}                            AS ActualDeparture,
+        {ts_expr('ActualArrival')}                              AS ActualArrival,
+        CAST(SourceData AS VARCHAR)                             AS SourceData
+    FROM read_csv(
+        '{CSV_FILE}',
+        header=true,
+        delim=',',
+        quote='"',
+        escape='"',
+        all_varchar=true,
+        nullstr=['', 'NULL', 'null'],
+        ignore_errors=true,
+        null_padding=true,
+        strict_mode=false,
+        sample_size=-1
+    )
 """)
 
 print("Resetting EUEligible to NULL...")
