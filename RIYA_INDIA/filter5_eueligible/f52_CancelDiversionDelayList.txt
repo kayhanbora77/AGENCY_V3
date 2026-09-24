@@ -1,4 +1,4 @@
---RiyaIndia Cancel,Diversion,Delay List
+--RiyaIndia Cancel,Diversion,Delay List(After MissConnectionList_Checked execute this query)
 WITH Src AS (
     SELECT *
     FROM TA_STANDARD_RIYAINDIA_VF_RESULT AS vf_result

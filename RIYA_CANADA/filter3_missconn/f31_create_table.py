@@ -103,8 +103,30 @@ FROM read_csv_auto(
 ) AS src;
 """)
 
-row_count = con.execute(f"SELECT COUNT(*) FROM {TABLE_NAME}").fetchone()[0]
-print(f"Table created : {TABLE_NAME}")
-print(f"Rows loaded   : {row_count:,}")
+print("Resetting EUEligible to NULL...")
+con.execute(f"UPDATE {TABLE_NAME} SET EUEligible = NULL")
+print("EUEligible reset successfully.")
 
+row_count = con.execute(f"SELECT COUNT(*) FROM {TABLE_NAME}").fetchone()[0]
+eu_null_count = con.execute(f"""
+    SELECT COUNT(*) FROM {TABLE_NAME} WHERE EUEligible IS NULL
+""").fetchone()[0]
+
+print()
+print("=" * 60)
+print(f"Table created  : {TABLE_NAME}")
+print(f"Rows loaded    : {row_count:,}")
+print(f"EUEligible NULL: {eu_null_count:,}")
+print("=" * 60)
+
+# =====================================================
+# COLUMNS (Showing Types)
+# =====================================================
+print("\nColumns:")
+for row in con.execute(f"DESCRIBE {TABLE_NAME}").fetchall():
+    print(f"{row[0]} ({row[1]})")
+
+print("\nSample Rows:")
+print(con.execute(f"SELECT * FROM {TABLE_NAME} LIMIT 5").fetchdf())
 con.close()
+print("\nDone.")
