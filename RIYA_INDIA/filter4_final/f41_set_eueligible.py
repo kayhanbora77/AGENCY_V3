@@ -124,9 +124,12 @@ def _compute_eu_eligibility(df: pd.DataFrame, ref_data: ReferenceData) -> pd.Ser
     Priority1 (High): FirstLeg.FromAirport = EU AND (that connection has a
         Disrupted leg) -> True.
 
-    Priority2: ANY leg is Disrupted AND that SAME leg's AirlineCode is in
-        SPECIAL_AIRLINES -> True. (Checked per-leg, not scoped to FirstLeg;
-        for a single flight this reduces to LegNo=1.)
+    Priority2: 
+        IsSingleFlight=1: LegNo=1 AND that leg is Disrupted AND its
+            AirlineCode is in SPECIAL_AIRLINES -> True.
+        IsSingleFlight=0: the FIRST (earliest) Disrupted leg's AirlineCode
+            is in SPECIAL_AIRLINES -> True. (Later disrupted legs are
+            ignored for this rule.)
 
     Priority3: FirstLeg.FromAirport = TR AND FirstLeg is Disrupted AND
         FirstLeg.AirlineCode in SPECIAL_TR_CARRIERS (LH/XQ/QR) -> True.
@@ -275,48 +278,91 @@ def _compute_eu_eligibility(df: pd.DataFrame, ref_data: ReferenceData) -> pd.Ser
     eligible = eligible.mask(p3_cond, True)
 
     # ================= Priority2 =================
-    # Any Disrupted leg whose OWN AirlineCode is a Special Airline
-    # -> True. This is a per-leg check across the whole connection,
-    # not scoped to FirstLeg only. For a single flight it reduces to the
-    # only leg (LegNo=1), matching the old behavior in that case.
-    leg_is_special_disrupted = is_disrupted_leg & df["AirlineCode"].isin(SPECIAL_AIRLINES)
-    p2_cond = leg_is_special_disrupted.groupby(uid, sort=False).transform("any")
-    eligible = eligible.mask(p2_cond, True)
+    # Single flight: the only leg (LegNo=1) is Disrupted and its carrier
+    # is a Special Airline.
+    p2_single = (
+        is_single
+        & (df["LegNo"] == 1)
+        & is_disrupted_leg
+        & df["AirlineCode"].isin(SPECIAL_AIRLINES)
+    )
 
+    # Connection: carrier of the EARLIEST Disrupted leg is a Special Airline.
+    # Connections with no Disrupted leg get NaN here -> isin() is False.
+    disrupted_rows = df.index[is_disrupted_leg]
+    if len(disrupted_rows):
+        first_disr_idx = (
+            df.loc[disrupted_rows].groupby(uid_col, sort=False)["LegNo"].idxmin()
+        )
+        first_disr_airline = _broadcast(uid, df["AirlineCode"], first_disr_idx)
+        p2_multi = (~is_single) & first_disr_airline.isin(SPECIAL_AIRLINES)
+    else:
+        p2_multi = pd.Series(False, index=df.index)
+
+    p2_cond = p2_single | p2_multi
+    eligible = eligible.mask(p2_cond, True)
     # ================= Priority1 (High) =================
     # FirstLeg departs EU. Unified across single/connection.
     p1_cond = is_candidate & first_from_is_eu
     eligible = eligible.mask(p1_cond, True)
 
-    return eligible.fillna(False).astype(bool)
+    return eligible
+    #return eligible.fillna(False).astype(bool)
 
 def _enforce_connection_level_consistency(df: pd.DataFrame) -> pd.Series:
-    """
-    Guarantees EUEligible is identical across every row sharing the same
-    ConnectionID. No-op given the broadcast/group logic above (every rule
-    resolves to the same value for every row in a connection); kept as a
-    safety net the same way the CANCELDIVERTDELAY script does.
-    """
-    return df.groupby("ConnectionID", sort=False)["EUEligible"].transform("any").astype(bool)
-
+    grp = df.groupby("ConnectionID", sort=False)["EUEligible"]
+    any_true = grp.transform(lambda s: s.eq(True).any())
+    any_false = grp.transform(lambda s: s.eq(False).any())
+    out = pd.Series(pd.NA, index=df.index, dtype="boolean")
+    out = out.mask(any_false, False)
+    out = out.mask(any_true, True)   # True wins if both somehow present
+    return out
 
 def process_table():
     con = duckdb.connect(DB_PATH)
-    ref_data = ReferenceData(con)
+    try:
+        ref_data = ReferenceData(con)
 
-    df = _fetch_candidate_rows(con)
+        df = _fetch_candidate_rows(con)
 
-    df["EUEligible"] = _compute_eu_eligibility(df, ref_data)
-    df["EUEligible"] = _enforce_connection_level_consistency(df)
+        df["EUEligible"] = _compute_eu_eligibility(df, ref_data)
+        df["EUEligible"] = _enforce_connection_level_consistency(df)
 
-    # FIX: Changed 0 to False because these columns are now strict BOOLEAN types
-    df.loc[~df["EUEligible"], "IsTimeLimitL1"] = False
-    df.loc[~df["EUEligible"], "IsTimeLimitL2"] = False
+        # Hand DuckDB plain Python None/bool -- no pd.NA, no nullable-dtype
+        # edge cases. (Explicit loop instead of .where(..., None), whose
+        # behaviour varies across pandas versions.)
+        df["EUEligible"] = pd.Series(
+            [None if pd.isna(v) else bool(v) for v in df["EUEligible"]],
+            index=df.index,
+            dtype=object,
+        )
 
-    # Source table is left untouched -- only the result table is written.
-    con.execute(f"DROP TABLE IF EXISTS {TARGET_TABLE}")
-    con.execute(f"CREATE TABLE {TARGET_TABLE} AS SELECT * FROM df")
-    con.close()
-
+        # Rule (enforced in SQL so it cannot be lost in the pandas->DuckDB copy):
+        #   EUEligible IS NULL   -> IsTimeLimitL1 = NULL, IsTimeLimitL2 = NULL
+        #   EUEligible = FALSE   -> IsTimeLimitL1 = FALSE, IsTimeLimitL2 = FALSE
+        #   EUEligible = TRUE    -> leave as-is
+        con.register("res_df", df)
+        con.execute(f"DROP TABLE IF EXISTS {TARGET_TABLE}")
+        con.execute(f"""
+            CREATE TABLE {TARGET_TABLE} AS
+            SELECT * REPLACE (
+                CAST(EUEligible AS BOOLEAN) AS EUEligible,
+                CASE
+                    WHEN EUEligible IS NULL THEN NULL
+                    WHEN CAST(EUEligible AS BOOLEAN) = FALSE THEN FALSE
+                    ELSE TRY_CAST(IsTimeLimitL1 AS BOOLEAN)
+                END AS IsTimeLimitL1,
+                CASE
+                    WHEN EUEligible IS NULL THEN NULL
+                    WHEN CAST(EUEligible AS BOOLEAN) = FALSE THEN FALSE
+                    ELSE TRY_CAST(IsTimeLimitL2 AS BOOLEAN)
+                END AS IsTimeLimitL2
+            )
+            FROM res_df
+        """)
+        con.unregister("res_df")
+    finally:
+        con.close()
+            
 if __name__ == "__main__":
     process_table()

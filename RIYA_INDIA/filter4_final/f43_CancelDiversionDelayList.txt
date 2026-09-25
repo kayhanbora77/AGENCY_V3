@@ -2,11 +2,11 @@
 WITH Src AS (
     SELECT *
     FROM TA_STANDARD_RIYAINDIA_VF_RESULT AS vf_result
-    WHERE vf_result.EUEligible is TRUE AND
+    WHERE vf_result.EUEligible IS TRUE AND
     	vf_result.Status IN ('cancel','diversion','Delay') AND
       NOT EXISTS (
             SELECT 1
-            FROM RIYAINDIA_MISSCONNECTION_CHECKEDV1 AS mc_checked
+            FROM RIYAINDIA_MISSCONNECTION_CHECKED AS mc_checked
             WHERE mc_checked.Id = vf_result.Id
       )
 )
@@ -28,7 +28,7 @@ COPY (
             vf_result.Status IN ('cancel','diversion','Delay') AND
           NOT EXISTS (
                 SELECT 1
-                FROM RIYAINDIA_MISSCONNECTION_CHECKEDV1 AS mc_checked
+                FROM RIYAINDIA_MISSCONNECTION_CHECKED AS mc_checked
                 WHERE mc_checked.Id = vf_result.Id
           )
     )
