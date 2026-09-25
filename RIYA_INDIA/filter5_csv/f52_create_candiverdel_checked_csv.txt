@@ -1,0 +1,21 @@
+COPY (
+    SELECT 
+        Id, ConnectionID, PaxName, AgencyRefNumber, CAST(ETicketNo AS VARCHAR) AS ETicketNo, 
+        FlightNumber, DepartureDate, FileName, BookingRef, AirlineCode, FromAirport, ToAirport, 
+        LastLegAirport, GMTDeparture, GMTArrival, EUEligibleDuration, ExtraNote, FlightFound, LegNo, 
+        EUFlights_Id, Link_Id, DelayInSecond, Status, OperatingFlightNo, SourceData,
+        
+        -- Convert DuckDB booleans to 1/0 for SQL Server BIT columns
+        CASE WHEN EUEligible THEN 1 ELSE 0 END AS EUEligible,
+        CASE WHEN IsTimeLimitL1 THEN 1 ELSE 0 END AS IsTimeLimitL1,
+        CASE WHEN IsTimeLimitL2 THEN 1 ELSE 0 END AS IsTimeLimitL2,
+        CASE WHEN IsSingleFlight THEN 1 ELSE 0 END AS IsSingleFlight,
+        CASE WHEN IsMultiSegment THEN 1 ELSE 0 END AS IsMultiSegment,
+        
+        ScheduledDeparture, ScheduledArrival, ActualDeparture, ActualArrival,
+        DelayMissConnection,
+        CASE WHEN IsMissConnection THEN 1 ELSE 0 END AS IsMissConnection
+        
+    FROM RIYAINDIA_CANDIVERDELAY_CHECKED
+    ORDER BY ConnectionID, LegNo
+) TO 'C:\Users\cagri\Desktop\RiyaIndia\Cases\Checked\RIYAINDIA_CANDIVERDELAY_CHECKED.csv' (HEADER, DELIMITER ',');
