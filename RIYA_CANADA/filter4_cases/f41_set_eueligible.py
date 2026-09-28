@@ -306,8 +306,7 @@ def _compute_eu_eligibility(df: pd.DataFrame, ref_data: ReferenceData) -> pd.Ser
     p1_cond = is_candidate & first_from_is_eu
     eligible = eligible.mask(p1_cond, True)
 
-    return eligible
-    #return eligible.fillna(False).astype(bool)
+    return eligible   
 
 def _enforce_connection_level_consistency(df: pd.DataFrame) -> pd.Series:
     grp = df.groupby("ConnectionID", sort=False)["EUEligible"]
