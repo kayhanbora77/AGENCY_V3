@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "duckdb-python-de": {
+      "command": "c:\\Coding\\AGENCY_V3\\.venv\\Scripts\\python.exe",
+      "args": [
+        "c:\\Coding\\AGENCY_V3\\mcp_server.py"
+      ]
+    }
+  }
+}
