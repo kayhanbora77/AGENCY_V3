@@ -73,6 +73,7 @@ def update_missconnection(processed_df: pd.DataFrame) -> None:
             FROM _miss_updates u
             WHERE t.Id = u.Id
         """)
+   
 def process_vectorized(df: pd.DataFrame) -> pd.DataFrame:
     # Sort is handled here, so you don't need to do it in main()
     df = df.sort_values(["ConnectionID", "LegNo"]).reset_index(drop=True)
