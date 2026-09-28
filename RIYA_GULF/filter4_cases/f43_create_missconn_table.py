@@ -5,9 +5,9 @@ import duckdb
 # =====================================================
 # CONFIG
 # =====================================================
-CSV_FILE = r"C:\Users\cagri\Desktop\RiyaGulf\TA_STANDARD_RIYAGULF_VF.csv"
+CSV_FILE = r"C:\Users\cagri\Desktop\RiyaGulf\Cases\Checked\RiyaGulf_MissConn_Checked.csv"
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-TABLE_NAME = "TA_STANDARD_RIYAGULF_VF"
+TABLE_NAME = "RIYAGULF_MISSCONN_CHECKED"
 
 # =====================================================
 # CSV HEADER
@@ -19,7 +19,7 @@ HEADER = (
     "ExtraNote,FlightFound,LegNo,IsTimeLimitL1,IsTimeLimitL2,"
     "EUFlights_Id,Link_Id,DelayInSecond,Status,IsSingleFlight,"
     "IsMultiSegment,OperatingFlightNo,ScheduledDeparture,ScheduledArrival,"
-    "ActualDeparture,ActualArrival,SourceData"
+    "ActualDeparture,ActualArrival,SourceData,DelayMissConnection,IsMissConnection"
 )
 
 # =====================================================
@@ -56,19 +56,22 @@ def ts_expr(col):
             TRY_CAST({c} AS TIMESTAMP)
         )"""
 
-# SQL macro expression equivalent to fix_scientific_notation logic:
-# Matches patterns like 6.00E+11, 6.0E+18 and simplifies them to 6E11, 6E18
+# Safe cast using HUGEINT (128-bit) to prevent out-of-range DOUBLE -> BIGINT overflow errors
 flight_clean_expr = """
     CASE 
         WHEN FlightNumber IS NULL THEN NULL
-        ELSE REGEXP_REPLACE(TRIM(CAST(FlightNumber AS VARCHAR)), '(?i)^(\\d+)\\.0+E\\+?(\\d+)$', '\\1E\\2')
+        WHEN REGEXP_MATCHES(FlightNumber, '(?i)^[0-9]+(\\.[0-9]+)?E\\+?[0-9]+$') 
+            THEN CAST(TRY_CAST(TRY_CAST(FlightNumber AS DOUBLE) AS HUGEINT) AS VARCHAR)
+        ELSE TRIM(CAST(FlightNumber AS VARCHAR))
     END
 """
 
 op_flight_clean_expr = """
     CASE 
         WHEN OperatingFlightNo IS NULL THEN NULL
-        ELSE REGEXP_REPLACE(TRIM(CAST(OperatingFlightNo AS VARCHAR)), '(?i)^(\\d+)\\.0+E\\+?(\\d+)$', '\\1E\\2')
+        WHEN REGEXP_MATCHES(OperatingFlightNo, '(?i)^[0-9]+(\\.[0-9]+)?E\\+?[0-9]+$') 
+            THEN CAST(TRY_CAST(TRY_CAST(OperatingFlightNo AS DOUBLE) AS HUGEINT) AS VARCHAR)
+        ELSE TRIM(CAST(OperatingFlightNo AS VARCHAR))
     END
 """
 
@@ -114,7 +117,9 @@ con.execute(f"""
         {ts_expr('ScheduledArrival')}                           AS ScheduledArrival,
         {ts_expr('ActualDeparture')}                            AS ActualDeparture,
         {ts_expr('ActualArrival')}                              AS ActualArrival,
-        CAST(SourceData AS VARCHAR)                             AS SourceData
+        CAST(SourceData AS VARCHAR)                             AS SourceData,
+        TRY_CAST(REPLACE(DelayMissConnection, '''', '') AS INTEGER) AS DelayMissConnection,
+        TRY_CAST(IsMissConnection AS BOOLEAN)                   AS IsMissConnection
     FROM read_csv(
         '{CSV_FILE}',
         header=true,
@@ -130,20 +135,9 @@ con.execute(f"""
     )
 """)
 
-print("Resetting EUEligible to NULL...")
-con.execute(f"UPDATE {TABLE_NAME} SET EUEligible = NULL")
-print("EUEligible reset successfully.")
-
-row_count = con.execute(f"SELECT COUNT(*) FROM {TABLE_NAME}").fetchone()[0]
-eu_null_count = con.execute(f"""
-    SELECT COUNT(*) FROM {TABLE_NAME} WHERE EUEligible IS NULL
-""").fetchone()[0]
-
 print()
 print("=" * 60)
 print(f"Table created  : {TABLE_NAME}")
-print(f"Rows loaded    : {row_count:,}")
-print(f"EUEligible NULL: {eu_null_count:,}")
 print("=" * 60)
 
 # =====================================================

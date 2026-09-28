@@ -60,11 +60,6 @@ def update_missconnection(processed_df: pd.DataFrame) -> None:
             ALTER TABLE {SOURCE_TABLE} 
             ADD COLUMN IF NOT EXISTS IsMissConnection BOOLEAN;
         """)
-        # If you also want to save the ID in the database, uncomment these lines:
-        # con.execute(f"""
-        #     ALTER TABLE {SOURCE_TABLE} 
-        #     ADD COLUMN IF NOT EXISTS DelayMissConnectionId VARCHAR;
-        # """)
 
         # 2. Register the dataframe for DuckDB to see it
         con.register("_miss_updates", updates)
