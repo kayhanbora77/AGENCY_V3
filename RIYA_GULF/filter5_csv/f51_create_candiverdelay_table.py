@@ -5,8 +5,8 @@ import duckdb
 # =====================================================
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
 SOURCE_TABLE = "TA_STANDARD_RIYAGULF_VF_EU"
-EXCLUDE_TABLE = "RIYAGULF_MISSCONN_CHECKED"
-NEW_TABLE_NAME = "RIYAGULF_CANDIVERDELAY_CHECKED"
+EXCLUDE_TABLE = "RIYAGULF_MISSCONN"
+NEW_TABLE_NAME = "RIYAGULF_CANDIVERDELAY"
 
 con = duckdb.connect(DB_PATH)
 
