@@ -1,0 +1,6 @@
+--Candidate TBO26 MissConnList
+SELECT * FROM TBO26_MISSCONN 
+WHERE ConnectionID IN(
+	SELECT ConnectionID FROM TBO26_MISSCONN
+	WHERE EUEligible IS TRUE AND IsMissConnection IS TRUE)
+	ORDER BY ConnectionID,LegNo
