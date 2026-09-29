@@ -1,7 +1,9 @@
 --Candidate RiyaCanada MissConnList
+SELECT * FROM RIYACANADA_MISSCONN WHERE EUEligible IS TRUE AND IsMissConnection IS TRUE
+
+--Candidate RiyaCanada MissConnList
 SELECT * FROM RIYACANADA_MISSCONN 
 WHERE ConnectionID IN(
 	SELECT ConnectionID FROM RIYACANADA_MISSCONN
 	WHERE EUEligible IS TRUE AND IsMissConnection IS TRUE)
-	ORDER BY ConnectionID,LegNo
-`
+	ORDER BY ConnectionID,LegNo`

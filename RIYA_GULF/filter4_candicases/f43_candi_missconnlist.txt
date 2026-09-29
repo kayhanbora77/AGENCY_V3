@@ -1,0 +1,10 @@
+--Candidate RiyaGulf MissConnList
+SELECT * FROM RIYAGULF_MISSCONN WHERE EUEligible IS TRUE AND IsMissConnection IS TRUE
+
+--Candidate RiyaGulf MissConnList
+SELECT * FROM RIYAGULF_MISSCONN 
+WHERE ConnectionID IN(
+	SELECT ConnectionID FROM RIYAGULF_MISSCONN
+	WHERE EUEligible IS TRUE AND IsMissConnection IS TRUE)
+	ORDER BY ConnectionID,LegNo
+

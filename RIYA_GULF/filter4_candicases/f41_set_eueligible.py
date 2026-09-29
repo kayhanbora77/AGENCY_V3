@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 # Constants
 SOURCE_TABLE = "TA_STANDARD_RIYAGULF_VF"
-TARGET_TABLE = "TA_STANDARD_RIYAGULF_VF_RESULT"
+TARGET_TABLE = "TA_STANDARD_RIYAGULF_VF_EU"
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
 
