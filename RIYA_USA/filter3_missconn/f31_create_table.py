@@ -7,7 +7,7 @@ import duckdb
 # =====================================================
 CSV_FILE = r"C:\Users\cagri\Desktop\RiyaUSA\TA_STANDARD_RIYAUSA_VF.csv"
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-TABLE_NAME = "TA_STANDARD_USA_VF"
+TABLE_NAME = "TA_STANDARD_RIYAUSA_VF"
 
 # =====================================================
 # CSV HEADER
