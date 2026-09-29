@@ -4,7 +4,7 @@ import duckdb
 # CONFIG
 # =====================================================
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-SOURCE_TABLE = "TA_STANDARD_RIYAUSA_VF_RESULT"
+SOURCE_TABLE = "TA_STANDARD_RIYAUSA_VF_EU"
 EXCLUDE_TABLE = "RIYAUSA_MISSCONN_CHECKED"
 NEW_TABLE_NAME = "RIYAUSA_CANDIVERDELAY_CHECKED"
 
