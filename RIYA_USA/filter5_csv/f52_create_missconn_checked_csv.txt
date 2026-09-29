@@ -1,4 +1,4 @@
---Create CSV FILE from RIYAUSA_MISSCONN_CHECKED Table
+--Create CSV FILE from RIYAUSA_MISSCONN Table
 COPY (
     SELECT 
         Id, ConnectionID, PaxName, AgencyRefNumber, CAST(ETicketNo AS VARCHAR) AS ETicketNo, 
@@ -17,6 +17,6 @@ COPY (
         DelayMissConnection,
         CASE WHEN IsMissConnection THEN 1 ELSE 0 END AS IsMissConnection
         
-    FROM RIYAUSA_MISSCONN_CHECKED
+    FROM RIYAUSA_MISSCONN
     ORDER BY ConnectionID, LegNo
-) TO 'C:\Users\cagri\Desktop\RiyaUSA\Cases\Checked\RIYAUSA_MISSCONN_CHECKED.csv' (HEADER, DELIMITER ',');
+) TO 'C:\Users\cagri\Desktop\RiyaUSA\Cases\Checked\RIYAUSA_MISSCONN.csv' (HEADER, DELIMITER ',');
