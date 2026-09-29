@@ -2,6 +2,7 @@ import os
 import shutil
 import duckdb
 
+# I didnt execute this script because RIYACANADA_MISSCONN was OKAY
 # =====================================================
 # CONFIG
 # =====================================================

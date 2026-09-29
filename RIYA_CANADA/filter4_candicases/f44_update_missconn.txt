@@ -1,0 +1,10 @@
+--1. Select Before Update
+SELECT * FROM RIYACANADA_MISSCONN WHERE ConnectionID IN 
+('0ce064f8-8c55-4e38-a920-6431ed44b8f5','82ac4045-dcb6-407d-a3c5-e00da0c26470')	
+ORDER BY ConnectionID,LegNo
+
+--2. Update EUEligible Manually
+UPDATE RIYACANADA_MISSCONN
+SET EUEligible=True,IsTimeLimitL2=True
+WHERE ConnectionID IN 
+('0ce064f8-8c55-4e38-a920-6431ed44b8f5','82ac4045-dcb6-407d-a3c5-e00da0c26470')

@@ -1,4 +1,4 @@
---Create CSV FILE from RIYACANADA_CANDIVERDELAY_CHECKED Table
+--Create CSV FILE from RIYACANADA_CANDIVERDELAY Table
 COPY (
     SELECT 
         Id, ConnectionID, PaxName, AgencyRefNumber, CAST(ETicketNo AS VARCHAR) AS ETicketNo, 
@@ -17,6 +17,6 @@ COPY (
         DelayMissConnection,
         CASE WHEN IsMissConnection THEN 1 ELSE 0 END AS IsMissConnection
         
-    FROM RIYACANADA_CANDIVERDELAY_CHECKED
+    FROM RIYACANADA_CANDIVERDELAY
     ORDER BY ConnectionID, LegNo
-) TO 'C:\Users\cagri\Desktop\RiyaCanada\Cases\Checked\RIYACANADA_CANDIVERDELAY_CHECKED.csv' (HEADER, DELIMITER ',');
+) TO 'C:\Users\cagri\Desktop\RiyaCanada\Cases\RIYACANADA_CANDIVERDELAY.csv' (HEADER, DELIMITER ',');
