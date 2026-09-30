@@ -1,4 +1,4 @@
---Create CSV FILE from TBO26_CANDIVERDELAY_CHECKED Table
+--Create CSV FILE from TBO26_CANDIVERDELAY Table
 COPY (
     SELECT 
         Id, ConnectionID, PaxName, AgencyRefNumber, CAST(ETicketNo AS VARCHAR) AS ETicketNo, 
@@ -17,6 +17,6 @@ COPY (
         DelayMissConnection,
         CASE WHEN IsMissConnection THEN 1 ELSE 0 END AS IsMissConnection
         
-    FROM TBO26_CANDIVERDELAY_CHECKED
+    FROM TBO26_CANDIVERDELAY
     ORDER BY ConnectionID, LegNo
-) TO 'C:\Users\cagri\Desktop\TBO26\Cases\Checked\TBO26_CANDIVERDELAY_CHECKED.csv' (HEADER, DELIMITER ',');
+) TO 'C:\Users\cagri\Desktop\TBO26\Cases\Checked\TBO26_CANDIVERDELAY.csv' (HEADER, DELIMITER ',');
