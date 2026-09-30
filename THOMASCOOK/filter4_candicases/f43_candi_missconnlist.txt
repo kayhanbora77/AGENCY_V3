@@ -1,0 +1,6 @@
+--Candidate ThomasCook MissConnList
+SELECT * FROM THOMASCOOK_MISSCONN 
+WHERE ConnectionID IN(
+	SELECT ConnectionID FROM THOMASCOOK_MISSCONN 
+	WHERE EUEligible IS TRUE AND IsMissConnection IS TRUE)
+	ORDER BY ConnectionID,LegNo
