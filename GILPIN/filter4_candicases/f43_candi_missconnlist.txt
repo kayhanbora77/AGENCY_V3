@@ -1,0 +1,6 @@
+--Candidate Gilpin MissConnList
+SELECT * FROM GILPIN_MISSCONN 
+WHERE ConnectionID IN(
+	SELECT ConnectionID FROM GILPIN_MISSCONN 
+	WHERE EUEligible IS TRUE AND IsMissConnection IS TRUE)
+	ORDER BY ConnectionID,LegNo
