@@ -5,8 +5,8 @@ import duckdb
 # =====================================================
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
 SOURCE_TABLE = "TA_STANDARD_TBO26_VF_EU"
-EXCLUDE_TABLE = "TBO26_MISSCONN_CHECKED"
-NEW_TABLE_NAME = "TBO26_CANDIVERDELAY_CHECKED"
+EXCLUDE_TABLE = "TBO26_MISSCONN"
+NEW_TABLE_NAME = "TBO26_CANDIVERDELAY"
 
 con = duckdb.connect(DB_PATH)
 
