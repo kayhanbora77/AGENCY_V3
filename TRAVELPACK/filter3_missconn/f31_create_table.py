@@ -5,7 +5,6 @@ import duckdb
 # =====================================================
 # CONFIG
 # =====================================================
-
 CSV_FILE = r"C:\Users\cagri\Desktop\Travelpack\TA_STANDARD_TRAVELPACK_VF.csv"
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
 TABLE_NAME = "TA_STANDARD_TRAVELPACK_VF"
@@ -47,6 +46,16 @@ con.execute(f"DROP TABLE IF EXISTS {TABLE_NAME}")
 
 print("Loading CSV into DuckDB...")
 
+def ts_expr(col):
+    """Parse M/D/YYYY H:mm, M/D/YYYY H:mm:ss, M/D/YYYY, or ISO into TIMESTAMP."""
+    c = f"TRIM({col})"
+    return f"""COALESCE(
+            TRY_STRPTIME({c}, '%m/%d/%Y %H:%M'),
+            TRY_STRPTIME({c}, '%m/%d/%Y %H:%M:%S'),
+            TRY_STRPTIME({c}, '%m/%d/%Y'),
+            TRY_CAST({c} AS TIMESTAMP)
+        )"""
+
 # SQL macro expression equivalent to fix_scientific_notation logic:
 # Matches patterns like 6.00E+11, 6.0E+18 and simplifies them to 6E11, 6E18
 flight_clean_expr = """
@@ -75,8 +84,7 @@ con.execute(f"""
         
         -- Clean FlightNumber
         {flight_clean_expr}                                     AS FlightNumber,
-        
-        TRY_CAST(DepartureDate AS TIMESTAMP)                    AS DepartureDate,
+        {ts_expr('DepartureDate')}                              AS DepartureDate,
         CAST(FileName AS VARCHAR)                               AS FileName,
         CAST(BookingRef AS VARCHAR)                             AS BookingRef,
         CAST(AirlineCode AS VARCHAR)                            AS AirlineCode,
@@ -102,10 +110,10 @@ con.execute(f"""
         -- Clean OperatingFlightNo
         {op_flight_clean_expr}                                  AS OperatingFlightNo,
         
-        TRY_CAST(ScheduledDeparture AS TIMESTAMP)               AS ScheduledDeparture,
-        TRY_CAST(ScheduledArrival AS TIMESTAMP)                 AS ScheduledArrival,
-        TRY_CAST(ActualDeparture AS TIMESTAMP)                  AS ActualDeparture,
-        TRY_CAST(ActualArrival AS TIMESTAMP)                    AS ActualArrival,
+        {ts_expr('ScheduledDeparture')}                         AS ScheduledDeparture,
+        {ts_expr('ScheduledArrival')}                           AS ScheduledArrival,
+        {ts_expr('ActualDeparture')}                            AS ActualDeparture,
+        {ts_expr('ActualArrival')}                              AS ActualArrival,
         CAST(SourceData AS VARCHAR)                             AS SourceData
     FROM read_csv(
         '{CSV_FILE}',

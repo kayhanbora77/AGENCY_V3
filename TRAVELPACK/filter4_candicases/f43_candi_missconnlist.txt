@@ -1,0 +1,6 @@
+--Candidate TravelPack MissConnList
+SELECT * FROM TRAVELPACK_MISSCONN 
+WHERE ConnectionID IN(
+	SELECT ConnectionID FROM TRAVELPACK_MISSCONN 
+	WHERE EUEligible IS TRUE AND IsMissConnection IS TRUE)
+	ORDER BY ConnectionID,LegNo
