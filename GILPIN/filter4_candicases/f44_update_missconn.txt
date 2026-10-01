@@ -1,0 +1,12 @@
+-- Get IsTimeLimitL1,IsTimeLimitL2 values
+SELECT * FROM TA_STANDARD_GILPIN where ConnectionID='e4f03bcd-4d3a-4c39-82a6-16acb85954bf'
+
+-- Check Before UPDATE
+SELECT * FROM GILPIN_MISSCONN where ConnectionID='e4f03bcd-4d3a-4c39-82a6-16acb85954bf'
+
+-- UPDATE GILPIN_MISSCONN EUEligible,IsTimeLimitL1,IsTimeLimitL2 FROM TA_STANDARD_GILPIN
+UPDATE GILPIN_MISSCONN
+SET EUEligible=TRUE,
+	IsTimeLimitL1=TRUE,
+	IsTimeLimitL2=TRUE
+WHERE ConnectionID='e4f03bcd-4d3a-4c39-82a6-16acb85954bf'
