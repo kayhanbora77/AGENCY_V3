@@ -1,3 +1,4 @@
+--Create CSV FILE from RIYAGULF_CANDIVERDELAY Table
 COPY (
     SELECT 
         Id, ConnectionID, PaxName, AgencyRefNumber, CAST(ETicketNo AS VARCHAR) AS ETicketNo, 
