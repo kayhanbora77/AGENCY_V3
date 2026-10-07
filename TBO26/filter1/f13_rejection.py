@@ -3,24 +3,61 @@ Flight Row Rejection  —  optimized for 5M+ rows
 =================================================
 Reads SOURCE_TABLE in batches, applies rejection rules, and routes rows:
   • Rejected rows  → REJECTION_TABLE  (with a RejectionReason column)
-  • Clean rows     → TARGET_TABLE     (with normalized FlightNo values)
+  • Clean rows     → TARGET_TABLE     (with normalized FlightNumber values)
 
 Rejection Rules
 ---------------
-1.  FlightNo validation      (FN_NULL, FN_EMPTY, DT_NULL, DT_EMPTY,
-                              FN_PURELY_NUMERIC, FN_TOO_LONG, FN_ALL_ZEROS,
-                              FN_ALL_ALPHA_AFTER_STRIP, FN_BAD_FORMAT)
-2.  FlightNo count != FlightDate count          → ROUTE_OVERFLOW
-3.  Duplicate segment (cross-batch, keep first) → DUPLICATE_SEGMENT
-4.  Batch-level duplicate                       → BATCH_DUPLICATE
-5.  FlightDate format / range [2015-2030]       → DT_BAD_FORMAT / DT_OUT_OF_RANGE
-6.  Missing FlightNo1 + FlightDate1             → MISSING_REQUIRED_SLOT
-7.  FlightNo bad format (1-3 alpha + digits)    → FN_BAD_FORMAT
-8.  AirlineCode not 2-3 letters                 → AC_BAD_FORMAT
-9.  Airport not exactly 3 letters               → AP_BAD_FORMAT
-10. FlightDate out of chronological order       → FD_DECREASING
-"""
+1.  Missing required FlightNumber1 + FlightDate1
+    → MISSING_REQUIRED_SLOT
 
+2.  FlightNumber validation
+    → FN_NULL
+    → FD_NULL
+    → FD_EMPTY
+    → FN_EMPTY
+    → FN_PURELY_NUMERIC
+    → FN_TOO_LONG
+    → FN_ALL_ZEROS
+    → FN_ALL_ALPHA_AFTER_STRIP
+    → FN_BAD_FORMAT
+
+3.  Consecutive duplicate FlightNumber
+    → FN_CONSECUTIVE_DUPLICATE
+    Rejects rows where two consecutive FlightNumber slots are identical
+    (e.g. FlightNumber1 == FlightNumber2).
+
+4.  FlightNumber count != FlightDate count
+    → ROUTE_OVERFLOW
+
+5.  FlightDate validation
+    → FD_BAD_FORMAT
+    → FD_OUT_OF_RANGE
+    Valid year range: 2015-2030.
+
+6.  FlightDate chronological order
+    → FD_DECREASING
+    Rejects rows where a populated FlightDate is earlier than the
+    previous populated FlightDate.
+
+7.  Airline code validation
+    → AC_BAD_FORMAT
+    Airline column must contain 2-3 alphanumeric characters.
+
+8.  Airport validation
+    → AP_BAD_FORMAT
+    Airport columns must contain exactly 3 alphabetic characters.
+
+9.  Duplicate segment detection
+    → DUPLICATE_SEGMENT
+    Cross-batch duplicate detection using DUP_KEY_COLS; first occurrence
+    is kept.DUP_KEY_COLS=PaxName,BookingRef,FlightNumber,FlightDate,Airport
+
+10. Batch-level duplicate detection
+    → BATCH_DUPLICATE
+    NOTE: currently the implementation uses Reason.DUPLICATE_SEGMENT
+    for duplicates found by find_batch_duplicates(). Therefore
+    BATCH_DUPLICATE is defined but is not currently emitted.
+"""
 import duckdb
 import math
 import os
