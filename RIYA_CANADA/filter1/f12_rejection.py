@@ -35,9 +35,9 @@ import pandas as pd
 # ============================================================================
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-SOURCE_TABLE = "RIYA_CANADA_SPLIT"  # input  table (read-only)
-TARGET_TABLE = "RIYA_CANADA_SPLIT2"  # output table for clean / passing rows
-REJECTION_TABLE = "RIYA_CANADA_REJECT"  # output table for rejected rows
+SOURCE_TABLE = "RIYACANADA_SPLIT"  # input  table (read-only)
+TARGET_TABLE = "RIYACANADA_SPLIT2"  # output table for clean / passing rows
+REJECTION_TABLE = "RIYACANADA_REJECT"  # output table for rejected rows
 
 MAX_FLIGHTS = 8
 MAX_FLTNO_LEN = 8  # max characters a flight number may have
@@ -46,35 +46,35 @@ BATCH_SIZE = 200_000
 DATE_YEAR_MIN = 2015
 DATE_YEAR_MAX = 2030
 
-AIRLINE_ALPHA_COL = "Airline"  # set to None to skip airline validation
+AIRLINE_ALPHA_COL = "AIRLINECODE"  # set to None to skip airline validation
 
 _RE_SCI_NOTATION = re.compile(r"^(\d+)(?:\.0+)?E\+?(\d+)$", re.IGNORECASE)
-FLIGHT_PREFIX = "FlightNumber"
-DATE_PREFIX = "DepartureDate"
-AIRPORT_PREFIX = "Airport"
+FLIGHT_PREFIX = "FLIGHTNUMBER"
+DATE_PREFIX = "DEPARTUREDATE"
+AIRPORT_PREFIX = "AIRPORT"
 
 # Columns that define a duplicate segment
 DUP_KEY_COLS = [
-    "PNRNo",
-    "PaxName",
-    "FlightNumber1",
-    "FlightNumber2",
-    "FlightNumber3",
-    "FlightNumber4",
-    "FlightNumber5",
-    "FlightNumber6",
-    "FlightNumber7",
-    "FlightNumber8",
-    "DepartureDate1",
-    "DepartureDate2",
-    "DepartureDate3",
-    "DepartureDate4",
-    "DepartureDate5",
-    "DepartureDate6",
-    "DepartureDate7",
-    "DepartureDate8",
-    "Airport1",
-    "Airport2",
+    "PNRNO",
+    "PAXNAME",
+    "FLIGHTNUMBER1",
+    "FLIGHTNUMBER2",
+    "FLIGHTNUMBER3",
+    "FLIGHTNUMBER4",
+    "FLIGHTNUMBER5",
+    "FLIGHTNUMBER6",
+    "FLIGHTNUMBER7",
+    "FLIGHTNUMBER8",
+    "DEPARTUREDATE1",
+    "DEPARTUREDATE2",
+    "DEPARTUREDATE3",
+    "DEPARTUREDATE4",
+    "DEPARTUREDATE5",
+    "DEPARTUREDATE6",
+    "DEPARTUREDATE7",
+    "DEPARTUREDATE8",
+    "AIRPORT1",
+    "AIRPORT2",
     "Airport3",
     "Airport4",
     "Airport5",

@@ -25,9 +25,9 @@ from datetime import datetime
 # ============================================================================
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-SOURCE_TABLE = "RIYA_CANADA_RAW"
-TARGET_TABLE = "RIYA_CANADA_SPLIT"
-REJECT_TABLE = "RIYA_CANADA_REJECT"
+SOURCE_TABLE = "RIYACANADA_RAW"
+TARGET_TABLE = "RIYACANADA_SPLIT"
+REJECT_TABLE = "RIYACANADA_REJECT"
 
 MAX_FLIGHTS = 8
 MAX_DATES = 8
@@ -35,9 +35,9 @@ MAX_AIRPORTS = 9
 
 BATCH_SIZE = 200_000
 
-FLIGHT_PREFIX = "FlightNumber"
-DATE_PREFIX = "DepartureDate"
-AIRPORT_PREFIX ="Airport"
+FLIGHT_PREFIX = "FLIGHTNUMBER"
+DATE_PREFIX = "DEPARTUREDATE"
+AIRPORT_PREFIX ="AIRPORT"
 
 # ============================================================================
 # COLUMN LISTS  —  match THOMASCOOK_RAW schema exactly
