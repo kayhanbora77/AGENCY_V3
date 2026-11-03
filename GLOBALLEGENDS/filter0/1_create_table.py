@@ -26,7 +26,7 @@ import duckdb
 # ----------------------------------------------------------------------------
 # Config
 # ----------------------------------------------------------------------------
-CSV_FILE = r"C:\Users\cagri\Desktop\Agency_Data\GlobalLegend\filter0\5YEARS_INTERNATIONAL_GLOBAL_TKTS_DATA.csv"
+CSV_FILE = r"C:\Users\cagri\Desktop\Agency_Data\Group2Data_September2026\GlobalLegend\filter0\5YEARS_INTERNATIONAL_GLOBAL_TKTS_DATA.csv"
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
 TABLE_NAME = "GLOBALLEGENDS_RAW"
 

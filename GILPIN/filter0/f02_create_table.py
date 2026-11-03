@@ -1,7 +1,7 @@
 import duckdb
 
 # File paths
-CSV_FILE = r"C:\Users\cagri\Desktop\Agency_Data\GULPIN\filter0\GILPIN_MERGED.csv"
+CSV_FILE = r"C:\Users\cagri\Desktop\Agency_Data\Group2Data_September2026\GILPIN\filter0\GILPIN_MERGED.csv"
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
 TABLE_NAME = "GILPIN_RAW"
 

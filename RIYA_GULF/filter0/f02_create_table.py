@@ -6,7 +6,7 @@ from pathlib import Path
 # CONFIG
 # ==================================================
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-CSV_PATH = r"C:\Users\cagri\Desktop\Agency_Data\Riya_GULF\filter-0\merged_Riya_Gulf.csv"
+CSV_PATH = r"C:\Users\cagri\Desktop\Agency_Data\Group2Data_September2026\Riya_GULF\filter-0\merged_Riya_Gulf.csv"
 TABLE_NAME = "RIYA_GULF_RAW"
 
 
@@ -18,7 +18,7 @@ def create_table(con):
         DROP TABLE IF EXISTS {TABLE_NAME};
         
         CREATE TABLE {TABLE_NAME} (
-            id                   UUID DEFAULT gen_random_uuid(),
+            Id                   UUID DEFAULT gen_random_uuid(),
             DocumentReferenceNo  VARCHAR,
             PNRNo                VARCHAR,
             PaxName              VARCHAR,
