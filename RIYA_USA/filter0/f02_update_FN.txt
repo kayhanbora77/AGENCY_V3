@@ -1,0 +1,10 @@
+UPDATE RIYAUSA_RAW
+SET
+    FlightNumber1 = CASE WHEN AirlineCode IS NOT NULL AND FlightNumber1 IS NOT NULL THEN AirlineCode || FlightNumber1 ELSE FlightNumber1 END,
+    FlightNumber2 = CASE WHEN AirlineCode IS NOT NULL AND FlightNumber2 IS NOT NULL THEN AirlineCode || FlightNumber2 ELSE FlightNumber2 END,
+    FlightNumber3 = CASE WHEN AirlineCode IS NOT NULL AND FlightNumber3 IS NOT NULL THEN AirlineCode || FlightNumber3 ELSE FlightNumber3 END,
+    FlightNumber4 = CASE WHEN AirlineCode IS NOT NULL AND FlightNumber4 IS NOT NULL THEN AirlineCode || FlightNumber4 ELSE FlightNumber4 END,
+    FlightNumber5 = CASE WHEN AirlineCode IS NOT NULL AND FlightNumber5 IS NOT NULL THEN AirlineCode || FlightNumber5 ELSE FlightNumber5 END,
+    FlightNumber6 = CASE WHEN AirlineCode IS NOT NULL AND FlightNumber6 IS NOT NULL THEN AirlineCode || FlightNumber6 ELSE FlightNumber6 END,
+    FlightNumber7 = CASE WHEN AirlineCode IS NOT NULL AND FlightNumber7 IS NOT NULL THEN AirlineCode || FlightNumber7 ELSE FlightNumber7 END,
+    FlightNumber8 = CASE WHEN AirlineCode IS NOT NULL AND FlightNumber8 IS NOT NULL THEN AirlineCode || FlightNumber8 ELSE FlightNumber8 END;
