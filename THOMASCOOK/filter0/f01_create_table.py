@@ -1,340 +1,313 @@
-"""
-Ultra-Fast Flight CSV -> DuckDB Loader
-Optimized for 5M+ rows
-Auto-detects the max number of FlightNo / Airport / DepartureDate / ArrivalDate
-columns needed, since the "/"-separated values can vary per row.
-"""
+import glob
+import os
+import re
+import uuid
 
 import duckdb
 import pandas as pd
-import re
-import csv
-import time
-import os
+import polars as pl
 
-from pathlib import Path
-
-# ============================================================================
+# ----------------------------------------------------------------------
 # CONFIG
-# ============================================================================
+# ----------------------------------------------------------------------
+EXCEL_FOLDER = r"C:\Users\cagri\Desktop\Group2_2026_September\ThomasCook\filter-0\splits"
+EXCEL_GLOB   = "*.xlsb"
 
-CSV_FILE_PATH = r"C:\Users\cagri\Desktop\Agency_Data\THOMASCOOK_2\filter-0\raw_data_csv.csv"
-DB_PATH = r"C:\DuckDB\my_db.duckdb"
-TABLE_NAME = "THOMASCOOK_RAW"
-CHUNK_SIZE = 1_000_000
-DELIMITER = None                  # None = auto-detect (tab/comma/etc.)
+DB_PATH      = r"C:\DuckDB\my_db.duckdb"
+TABLE_NAME   = "THOMASCOOK_RAW"
 
-# The multi-value columns and the column-name prefix they expand into.
-# Key = uppercase header name to match in the CSV (case-insensitive match).
-SPECIAL_COLS = {
-    "FLIGHTNUMBER": "FlightNo",
-    "SECTOR": "Airport",
-    "DEPARTUREDATE": "DepartureDate",
-    "ARRIVALDATE": "ArrivalDate",
+TRUNCATE_BEFORE_LOAD = True
+
+# ----------------------------------------------------------------------
+# IMPORTANT: the Excel loader UPPERCASES every column name.
+# So every constant below must be UPPERCASE too.
+# ----------------------------------------------------------------------
+AIRLINE_COL        = "AIRLINE_CODE"
+FLIGHT_NUMBER_COLS = [f"FLIGHTNO{i}" for i in range(1, 14)]
+DATE_COLS          = [f"DEPARTURE_DATE{i}" for i in range(1, 14)]
+AIRPORT_COLS       = [f"AIRPORT{i}" for i in range(1, 15)]
+
+FLIGHTDATE_FORMATS = [
+    "%Y-%m-%d - %H%M",            # 2019-01-01 - 1235  (ThomasCook format)
+    "%m/%d/%Y %H:%M:%S", "%m/%d/%Y %H:%M", "%m/%d/%Y",
+    "%d-%b-%y", "%d-%b-%Y",
+    "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d",
+    "%d/%m/%Y",
+]
+
+VARCHAR_COLS = {
+    "COMPANY", "AIRLINE_PNR", "GDS_PNR", "TICKET_NO", "INVOICE_AND_REFUNDID", "GROUP_NAME",
+    AIRLINE_COL, "AIRLINE_NAME", "STATUS",
+    *FLIGHT_NUMBER_COLS,
+    *AIRPORT_COLS,
 }
 
-# ============================================================================
-# DELIMITER DETECTION
-# ============================================================================
+# ----------------------------------------------------------------------
+# HELPERS
+# ----------------------------------------------------------------------
+def quote_identifier(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
 
+def validate_table_name(name: str) -> None:
+    parts = name.split(".")
+    if not parts or any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", p) for p in parts):
+        raise ValueError(f"Invalid DuckDB table name: {name!r}")
 
-def detect_encoding(csv_path):
-    """
-    Try encodings in order of strictness. utf-8-sig handles plain UTF-8 and
-    UTF-8-with-BOM. If that fails (accented chars from Windows exports, etc.)
-    fall back to cp1252 (standard Windows encoding), then latin-1 which never
-    raises (every byte maps to a character) as a last resort.
-    """
-    candidates = ["utf-8-sig", "cp1252", "latin-1"]
-    for enc in candidates:
-        try:
-            with open(csv_path, encoding=enc) as f:
-                # read the whole file to make sure there's no bad byte further in,
-                # not just in the first chunk
-                f.read()
-            return enc
-        except UnicodeDecodeError:
+# ----------------------------------------------------------------------
+# STEP 1 - FIND + READ EXCEL FILES (ALL SHEETS)
+# ----------------------------------------------------------------------
+def list_excel_files(folder: str, pattern: str) -> list[str]:
+    if not os.path.isdir(folder):
+        raise FileNotFoundError(f"Excel folder not found: {folder}")
+    files = sorted(glob.glob(os.path.join(folder, pattern)))
+    if not files:
+        raise FileNotFoundError(f"No files matching {pattern!r} in {folder}")
+    return files
+
+def read_excel_all_sheets(path: str) -> pl.DataFrame:
+    """Read every sheet, everything as String, header normalised to UPPERCASE."""
+    ext = os.path.splitext(path)[1].lower()
+    engine = "pyxlsb" if ext == ".xlsb" else "openpyxl"
+
+    sheets = pd.read_excel(
+        path,
+        sheet_name=None,
+        dtype=str,
+        keep_default_na=False,
+        na_values=[""],
+        engine=engine,
+    )
+
+    frames: list[pl.DataFrame] = []
+    for sheet_name, pdf in sheets.items():
+        if pdf is None or pdf.empty:
+            print(f"  {os.path.basename(path)} [{sheet_name}]: empty, skipped")
             continue
-    return "latin-1"  # unreachable in practice, latin-1 always decodes
 
+        pdf.columns = [str(c).strip().upper() for c in pdf.columns]
+        df = pl.from_pandas(pdf, include_index=False)
+        df = df.with_columns(pl.col(c).cast(pl.String) for c in df.columns)
+        df = df.with_columns(pl.lit(sheet_name).alias("SourceSheet"))
+        frames.append(df)
+        print(f"  {os.path.basename(path)} [{sheet_name}]: "
+              f"{df.height:,} rows, {df.width} cols")
 
-def detect_delimiter(csv_path, encoding):
-    with open(csv_path, newline="", encoding=encoding) as f:
-        sample = f.read(4096)
-    sniffer = csv.Sniffer()
-    try:
-        dialect = sniffer.sniff(sample, delimiters=",\t|;")
-        return dialect.delimiter
-    except Exception:
-        return ","
+    return pl.concat(frames, how="diagonal") if frames else pl.DataFrame()
 
+# ----------------------------------------------------------------------
+# STEP 2 - CLEAN TEXT, ADD Id / SourceFile
+# ----------------------------------------------------------------------
+def clean_text_columns(df: pl.DataFrame) -> pl.DataFrame:
+    return df.with_columns(
+        pl.when(pl.col(c).str.strip_chars() == "")
+          .then(None)
+          .otherwise(pl.col(c).str.strip_chars())
+          .alias(c)
+        for c in df.columns
+    )
 
-# ============================================================================
-# "/" SPLIT HELPERS
-# ============================================================================
+def add_uuid_and_source(df: pl.DataFrame, source_name: str) -> pl.DataFrame:
+    if "Id" in df.columns:
+        raise ValueError("Source data already contains an 'Id' column.")
 
+    ids = pl.Series("Id", [str(uuid.uuid4()) for _ in range(df.height)], dtype=pl.String)
+    df = df.with_columns(ids, pl.lit(source_name).alias("SourceFile"))
+    return df.select(["Id", "SourceFile",
+                      *[c for c in df.columns if c not in ("Id", "SourceFile")]])
 
-def split_by_slash(raw):
-    """Split a raw '/'-separated string into trimmed, non-empty tokens."""
-    if not raw:
-        return []
-    return [t.strip() for t in str(raw).split("/") if t.strip()]
+# ----------------------------------------------------------------------
+# STEP 2b - NORMALISE FLIGHT NUMBERS ("AK 585 " -> "AK585")
+# ----------------------------------------------------------------------
+def normalize_flight_numbers(df: pl.DataFrame) -> pl.DataFrame:
+    cols = [c for c in FLIGHT_NUMBER_COLS if c in df.columns]
+    return df.with_columns(
+        pl.col(c).str.replace_all(r"\s+", "").str.to_uppercase().alias(c)
+        for c in cols
+    )
 
-
-def split_flight_nos(raw):
-    """
-    'AK 585 / AK 11 / AK 12 / AK 582' -> ['AK585', 'AK11', 'AK12', 'AK582']
-    """
-    parts = split_by_slash(raw)
-    return [re.sub(r"\s+", "", p) for p in parts]
-
-
-def split_sectors(raw):
-    """
-    'MNL-KUL/KUL-MAA/MAA-KUL/KUL-MNL' -> ['MNL', 'KUL', 'MAA', 'KUL', 'MNL']
-    Takes the origin of the first leg, then the destination of every leg.
-    """
-    tokens = split_by_slash(raw)
-    airports = []
-    for t in tokens:
-        parts = [p.strip() for p in t.split("-")]
-        if len(parts) < 2:
+# ----------------------------------------------------------------------
+# STEP 2c - AIRPORTS: split sectors into single airports, drop repeats
+#   AIRPORT1..4 = MNL-KUL, KUL-MAA, MAA-KUL, KUL-MNL
+#   -> AIRPORT1..5 = MNL, KUL, MAA, KUL, MNL
+#   (a sector's origin equal to the previous airport is removed; the
+#    result is re-split safely if the script runs on already-split data)
+# ----------------------------------------------------------------------
+def _expand_airports(values: list) -> list:
+    seq: list[str] = []
+    for v in values:
+        if v is None:
             continue
-        if not airports:
-            airports.append(parts[0])
-        airports.append(parts[-1])
-    return airports
+        for token in re.split(r"\s*-\s*", str(v).strip()):
+            token = token.strip().upper()
+            if not token:
+                continue
+            if seq and seq[-1] == token:      # same as previous -> drop
+                continue
+            seq.append(token)
+    return seq
 
+def split_airports(df: pl.DataFrame, source_name: str) -> pl.DataFrame:
+    present = [c for c in AIRPORT_COLS if c in df.columns]
+    if not present:
+        return df
 
-# '2019-01-01 - 1240' -> '2019-01-01 - 12:40'
-DATE_TOKEN_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})\s*-\s*(\d{1,4})$")
+    rows = df.select(present).rows()
+    n = len(AIRPORT_COLS)
+    new_cols: list[list] = [[] for _ in range(n)]
+    overflow = 0
 
+    for row in rows:
+        seq = _expand_airports(list(row))
+        if len(seq) > n:
+            overflow += 1
+            seq = seq[:n]
+        seq += [None] * (n - len(seq))
+        for i in range(n):
+            new_cols[i].append(seq[i])
 
-def format_date_token(tok):
-    tok = tok.strip()
-    m = DATE_TOKEN_RE.match(tok)
-    if m:
-        date_part = m.group(1)
-        digits = m.group(2).zfill(4)
-        return f"{date_part} - {digits[:2]}:{digits[2:]}"
-    return tok  # leave anything unexpected untouched rather than dropping it
+    if overflow:
+        print(f"\nWARNING [{source_name}]: {overflow:,} row(s) had more than {n} "
+              f"airports after splitting; extra airports were truncated.")
 
+    return df.with_columns(
+        pl.Series(AIRPORT_COLS[i], new_cols[i], dtype=pl.String) for i in range(n)
+    )
 
-def split_dates(raw):
-    """
-    '2019-01-01 - 1240 / 2019-01-01 - 0605' ->
-    ['2019-01-01 - 12:40', '2019-01-01 - 06:05']
-    """
-    return [format_date_token(t) for t in split_by_slash(raw)]
+# ----------------------------------------------------------------------
+# STEP 3 - PARSE DATES
+# ----------------------------------------------------------------------
+def parse_dates(df: pl.DataFrame, source_name: str) -> pl.DataFrame:
+    for col in DATE_COLS:
+        if col not in df.columns:
+            continue
 
+        parsed = pl.coalesce([
+            pl.col(col).str.strptime(pl.Datetime, format=fmt, strict=False, exact=True)
+            for fmt in FLIGHTDATE_FORMATS
+        ])
 
-# ============================================================================
-# HEADER / SCHEMA DISCOVERY
-# ============================================================================
+        tmp = df.with_columns(parsed.alias("__parsed"))
+        bad = tmp.filter(pl.col(col).is_not_null() & pl.col("__parsed").is_null()).select(col)
+        if bad.height:
+            print(f"\nWARNING [{source_name}]: {bad.height:,} invalid date value(s) in {col}:")
+            print(bad.unique().head(20))
+        
+        df = tmp.with_columns(pl.col("__parsed").dt.date().alias(col)).drop("__parsed")
+    return df
 
+# ----------------------------------------------------------------------
+# STEP 4 - INSERT INTO DUCKDB, THEN PREFIX FLIGHT NUMBERS
+# ----------------------------------------------------------------------
+def insert_into_duckdb(df: pl.DataFrame, db_path: str, table_name: str) -> None:
+    validate_table_name(table_name)
 
-def find_header_and_base_cols(csv_path, delimiter, encoding):
-    with open(csv_path, newline="", encoding=encoding) as f:
-        reader = csv.reader(f, delimiter=delimiter)
-        header = next(reader)
-    header = [h.strip() for h in header]
-
-    special_upper = set(SPECIAL_COLS.keys())
-    base_cols = [h for h in header if h.upper() not in special_upper]
-
-    # map SPECIAL_COLS key -> actual header text as it appears in the file
-    special_actual = {}
-    for h in header:
-        if h.upper() in special_upper:
-            special_actual[h.upper()] = h
-
-    return header, base_cols, special_actual
-
-
-def scan_max_counts(csv_path, delimiter, special_actual, encoding):
-    """
-    Pass 1: stream through the whole file just to find, per special column,
-    the maximum number of '/'-separated values seen in any row. This tells us
-    how many FlightNo1..N / Airport1..M / DepartureDate1..D / ArrivalDate1..A
-    columns the table needs before we CREATE TABLE.
-    """
-    max_counts = {"FlightNo": 0, "Airport": 0, "DepartureDate": 0, "ArrivalDate": 0}
-
-    fn_col = special_actual.get("FLIGHTNUMBER")
-    sec_col = special_actual.get("SECTOR")
-    dep_col = special_actual.get("DEPARTUREDATE")
-    arr_col = special_actual.get("ARRIVALDATE")
-
-    with open(csv_path, newline="", encoding=encoding) as f:
-        reader = csv.DictReader(f, delimiter=delimiter)
-        for i, row in enumerate(reader, 1):
-            if fn_col:
-                n = len(split_flight_nos(row.get(fn_col) or ""))
-                if n > max_counts["FlightNo"]:
-                    max_counts["FlightNo"] = n
-            if sec_col:
-                n = len(split_sectors(row.get(sec_col) or ""))
-                if n > max_counts["Airport"]:
-                    max_counts["Airport"] = n
-            if dep_col:
-                n = len(split_by_slash(row.get(dep_col) or ""))
-                if n > max_counts["DepartureDate"]:
-                    max_counts["DepartureDate"] = n
-            if arr_col:
-                n = len(split_by_slash(row.get(arr_col) or ""))
-                if n > max_counts["ArrivalDate"]:
-                    max_counts["ArrivalDate"] = n
-
-            if i % 500_000 == 0:
-                print(f"  scanned {i:,} rows...")
-
-    return max_counts
-
-
-def build_all_cols(base_cols, max_counts):
-    cols = list(base_cols)
-    cols += [f"FlightNo{i + 1}" for i in range(max_counts["FlightNo"])]
-    cols += [f"Airport{i + 1}" for i in range(max_counts["Airport"])]
-    cols += [f"DepartureDate{i + 1}" for i in range(max_counts["DepartureDate"])]
-    cols += [f"ArrivalDate{i + 1}" for i in range(max_counts["ArrivalDate"])]
-    return cols
-
-
-# ============================================================================
-# ROW PROCESSING
-# ============================================================================
-
-
-def process_row(row, all_cols, base_cols, special_actual):
-    values = {}
-
-    for c in base_cols:
-        v = row.get(c)
-        values[c] = v.strip() if isinstance(v, str) else v
-
-    fn_col = special_actual.get("FLIGHTNUMBER")
-    sec_col = special_actual.get("SECTOR")
-    dep_col = special_actual.get("DEPARTUREDATE")
-    arr_col = special_actual.get("ARRIVALDATE")
-
-    if fn_col:
-        for i, v in enumerate(split_flight_nos(row.get(fn_col) or "")):
-            values[f"FlightNo{i + 1}"] = v
-    if sec_col:
-        for i, v in enumerate(split_sectors(row.get(sec_col) or "")):
-            values[f"Airport{i + 1}"] = v
-    if dep_col:
-        for i, v in enumerate(split_dates(row.get(dep_col) or "")):
-            values[f"DepartureDate{i + 1}"] = v
-    if arr_col:
-        for i, v in enumerate(split_dates(row.get(arr_col) or "")):
-            values[f"ArrivalDate{i + 1}"] = v
-
-    return [values.get(c) for c in all_cols]
-
-
-# ============================================================================
-# MAIN
-# ============================================================================
-
-
-def main():
-    csv_path = str(Path(CSV_FILE_PATH).resolve())
-    db_path = str(Path(DB_PATH).resolve())
-
-    if not Path(csv_path).exists():
-        print(f"ERROR: File not found -> {csv_path}")
-        return
-
-    encoding = detect_encoding(csv_path)
-    delimiter = DELIMITER or detect_delimiter(csv_path, encoding)
-
-    print(f"\n{'=' * 70}")
-    print("ULTRA FAST CSV -> DUCKDB LOADER (auto-detected split counts)")
-    print(f"{'=' * 70}")
-    print(f"CSV       : {csv_path}")
-    print(f"Database  : {db_path}")
-    print(f"Table     : {TABLE_NAME}")
-    print(f"Encoding  : {encoding}")
-    print(f"Delimiter : {repr(delimiter)}")
-    print(f"{'=' * 70}\n")
-
-    start_total = time.time()
-
-    header, base_cols, special_actual = find_header_and_base_cols(csv_path, delimiter, encoding)
-
-    print("Pass 1/2: scanning file to find max split counts...")
-    max_counts = scan_max_counts(csv_path, delimiter, special_actual, encoding)
-    print(f"  Max FlightNo columns      : {max_counts['FlightNo']}")
-    print(f"  Max Airport columns       : {max_counts['Airport']}")
-    print(f"  Max DepartureDate columns : {max_counts['DepartureDate']}")
-    print(f"  Max ArrivalDate columns   : {max_counts['ArrivalDate']}\n")
-
-    all_cols = build_all_cols(base_cols, max_counts)
+    missing = VARCHAR_COLS.difference(df.columns)
+    if missing:
+        raise ValueError(
+            f"Required VARCHAR columns missing from source: {sorted(missing)}\n"
+            f"  DataFrame columns:  {df.columns}\n"
+            f"  VARCHAR_COLS set:   {sorted(VARCHAR_COLS)}"
+        )
 
     con = duckdb.connect(db_path)
-    con.execute(f"PRAGMA threads={os.cpu_count()}")
     try:
-        con.execute("SET memory_limit='16GB'")
-    except Exception:
-        pass
-
-    print(f"Creating table ({len(all_cols)} data columns + id UUID)...")
-    con.execute(f'DROP TABLE IF EXISTS "{TABLE_NAME}"')
-    col_defs = ", ".join([f'"{c}" VARCHAR' for c in all_cols])
-    con.execute(f"""
-        CREATE TABLE "{TABLE_NAME}" (
-            id UUID DEFAULT gen_random_uuid(),
-            {col_defs}
+        con.register("flight_data_df", df)
+        table_sql   = ".".join(quote_identifier(p) for p in table_name.split("."))
+        columns_sql = ", ".join(quote_identifier(c) for c in df.columns)
+        select_sql  = ", ".join(
+            f"CAST({quote_identifier(c)} AS VARCHAR) AS {quote_identifier(c)}"
+            if c in VARCHAR_COLS else quote_identifier(c)
+            for c in df.columns
         )
-    """)
 
-    print("Pass 2/2: loading rows...\n")
-    inserted = 0
-    batch = []
-    start_insert = time.time()
+        con.execute("BEGIN TRANSACTION")
+        try:
+            if TRUNCATE_BEFORE_LOAD:
+                con.execute(f"DROP TABLE IF EXISTS {table_sql}")
 
-    with open(csv_path, newline="", encoding=encoding) as f:
-        reader = csv.DictReader(f, delimiter=delimiter)
-
-        for row in reader:
-            batch.append(process_row(row, all_cols, base_cols, special_actual))
-
-            if len(batch) >= CHUNK_SIZE:
-                batch_df = pd.DataFrame(batch, columns=all_cols)
-                col_list = ", ".join(f'"{c}"' for c in all_cols)
-                con.execute(
-                    f'INSERT INTO "{TABLE_NAME}" ({col_list}) SELECT * FROM batch_df'
-                )
-                inserted += len(batch)
-                elapsed = time.time() - start_insert
-                rate = inserted / elapsed if elapsed > 0 else 0
-                print(f"{inserted:>12,} rows   {rate:>10,.0f} rows/sec")
-                batch.clear()
-
-        if batch:
-            batch_df = pd.DataFrame(batch, columns=all_cols)
-            col_list = ", ".join(f'"{c}"' for c in all_cols)
             con.execute(
-                f'INSERT INTO "{TABLE_NAME}" ({col_list}) SELECT * FROM batch_df'
+                f"CREATE TABLE IF NOT EXISTS {table_sql} AS "
+                f"SELECT {select_sql} FROM flight_data_df WHERE FALSE"
             )
-            inserted += len(batch)
 
-    count = con.execute(f'SELECT COUNT(*) FROM "{TABLE_NAME}"').fetchone()[0]
-    con.close()
+            target_types = {r[0]: r[1].upper()
+                            for r in con.execute(f"DESCRIBE SELECT * FROM {table_sql}").fetchall()}
+            for col in VARCHAR_COLS:
+                if target_types.get(col) != "VARCHAR":
+                    raise TypeError(f"{table_name}.{col} must be VARCHAR, "
+                                    f"but is {target_types.get(col)!r}.")
 
-    elapsed_total = time.time() - start_total
+            before = con.execute(f"SELECT COUNT(*) FROM {table_sql}").fetchone()[0]
+            con.execute(
+                f"INSERT INTO {table_sql} ({columns_sql}) SELECT {select_sql} FROM flight_data_df"
+            )
+            after = con.execute(f"SELECT COUNT(*) FROM {table_sql}").fetchone()[0]
+            if after - before != df.height:
+                raise RuntimeError(f"Row-count mismatch: source={df.height:,}, "
+                                   f"inserted={after - before:,}")
 
-    print(f"\n{'=' * 70}")
-    print("DONE")
-    print(f"{'=' * 70}")
-    print(f"Inserted Rows : {inserted:,}")
-    print(f"Verified Rows : {count:,}")
-    print(f"Elapsed Time  : {elapsed_total:.1f} sec")
-    if elapsed_total > 0:
-        print(f"Rows / Second : {inserted / elapsed_total:,.0f}")
-    print(f"{'=' * 70}")
+            # ---- FlightNumberN = AirlineCode || FlightNumberN ----
+            # Flight numbers were already whitespace-stripped (e.g. "AK585").
+            # Only prefix when the value has NO carrier code of its own
+            # (pure digits like "733"). A value such as "AK585" under
+            # AIRLINE_CODE "FD" (codeshare) is kept as is.
+            air = f"TRIM({quote_identifier(AIRLINE_COL)})"
+            set_clause = ", ".join(
+                f"{quote_identifier(c)} = "
+                f"CASE "
+                f"  WHEN {air} IS NULL OR {air} = '' "
+                f"    OR {quote_identifier(c)} IS NULL OR {quote_identifier(c)} = '' "
+                f"  THEN {quote_identifier(c)} "
+                f"  WHEN regexp_matches({quote_identifier(c)}, '^([A-Z][A-Z0-9]|[0-9][A-Z])[0-9]') "
+                f"  THEN {quote_identifier(c)} "
+                f"  ELSE {air} || {quote_identifier(c)} "
+                f"END"
+                for c in FLIGHT_NUMBER_COLS
+            )
 
+            print("Running UPDATE:", set_clause[:160], "...")
+            con.execute(f"UPDATE {table_sql} SET {set_clause}")
+
+            con.execute("COMMIT")
+        except Exception:
+            con.execute("ROLLBACK")
+            raise
+
+        print(f"\nSuccessfully loaded: {table_name}")
+        print(f"Source rows:   {df.height:,}")
+        print(f"Target rows:   {after:,}")
+    finally:
+        con.close()
+
+# ----------------------------------------------------------------------
+# MAIN
+# ----------------------------------------------------------------------
+def main() -> None:
+    files = list_excel_files(EXCEL_FOLDER, EXCEL_GLOB)
+    print(f"Found {len(files)} file(s) in {EXCEL_FOLDER}")
+
+    frames: list[pl.DataFrame] = []
+    for path in files:
+        name = os.path.basename(path)
+        df = read_excel_all_sheets(path)
+        if df.height == 0:
+            print(f"  {name}: all sheets empty, skipped")
+            continue
+
+        df = clean_text_columns(df)
+        df = normalize_flight_numbers(df)
+        df = split_airports(df, name)
+        df = add_uuid_and_source(df, name)
+        df = parse_dates(df, name)
+        frames.append(df)
+
+    if not frames:
+        raise RuntimeError("All files/sheets were empty - nothing to load.")
+
+    combined = pl.concat(frames, how="diagonal")
+    print(f"\nProcessed rows (all files/sheets): {combined.height:,}")
+
+    insert_into_duckdb(combined, DB_PATH, TABLE_NAME)
 
 if __name__ == "__main__":
     main()
