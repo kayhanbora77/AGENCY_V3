@@ -1,0 +1,12 @@
+COPY (
+    SELECT
+        Id,
+        TRIM(REPLACE(BookingRef, ',', ''))                      AS BookingRef,
+        CAST(FlightNumber AS VARCHAR)                           AS FlightNumber,
+        DepartureDate,
+        REGEXP_REPLACE(CAST(ETicketNumber AS VARCHAR), '\.0$', '') AS ETicketNumber,
+        CAST(PaxFullName AS VARCHAR)							   AS PaxName	
+    FROM TRAVELPACK_CASES
+)
+TO 'C:\Users\cagri\Desktop\tmp\TRAVELPACK_CASES.csv'
+(HEADER, DELIMITER ',');
