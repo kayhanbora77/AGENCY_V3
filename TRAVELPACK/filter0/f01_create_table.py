@@ -22,7 +22,7 @@ import pandas as pd
 # CONFIG
 # ----------------------------------------------------------------------
 
-CSV_PATH = r"C:\Users\cagri\Desktop\Agency_Data\TravelPack\filter0\Travel Pack UK - C2R Format.csv"
+CSV_PATH = r"C:\Users\cagri\Desktop\Group2_2026_September\Travelpack\filter0\Travel Pack UK - C2R Format.csv"
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
 TABLE_NAME = "TRAVELPACK_RAW"        # target table name
 CSV_SEP = ","                         # sample data is tab-separated; change to "," if needed
@@ -37,6 +37,8 @@ DATE_COLS = ["DepartureDate1", "DepartureDate2"]
 # Encoding fallback chain (matches the pattern used across the other agency pipelines)
 ENCODING_CHAIN = ["utf-8-sig", "cp1252", "latin-1"]
 
+# Columns that must always remain strings
+STRING_COLS = ["ETicketNo"]
 
 # ----------------------------------------------------------------------
 # STEP 1 - READ CSV (with encoding fallback)
@@ -133,7 +135,40 @@ def parse_dates(df: pd.DataFrame) -> pd.DataFrame:
         df[col] = parsed  # datetime64[ns], NaT for blanks -> becomes NULL in DuckDB
     return df
 
+def clean_eticket_number(value):
+    """
+    Preserve ticket numbers as strings.
 
+    Examples:
+        9.83E+11       -> 983000000000
+        982794000000   -> 982794000000
+        098279400000   -> 098279400000
+        blank          -> None
+    """
+    if value is None or pd.isna(value):
+        return None
+
+    s = str(value).strip()
+
+    if s == "" or s.lower() in ("nan", "none", "null"):
+        return None
+
+    # Handle scientific notation
+    if re.fullmatch(r"\d+(?:\.\d+)?[eE][+-]?\d+", s):
+        from decimal import Decimal, InvalidOperation
+
+        try:
+            number = Decimal(s)
+
+            if number == number.to_integral_value():
+                return format(number.quantize(Decimal("1")), "f")
+
+            return format(number, "f")
+
+        except InvalidOperation:
+            return s
+
+    return s
 # ----------------------------------------------------------------------
 # STEP 5 - INSERT INTO DUCKDB
 # ----------------------------------------------------------------------
@@ -175,6 +210,9 @@ def main():
     df = process_flight_columns(df)
     df = parse_dates(df)
 
+    # Preserve ETicketNo as string
+    if "ETicketNo" in df.columns:
+        df["ETicketNo"] = df["ETicketNo"].apply(clean_eticket_number)
 
     insert_into_duckdb(df, DB_PATH, TABLE_NAME)
 
